@@ -38,3 +38,59 @@
 - `output/submission_best.csv` — log1p 타겟 예측 (best)
 - `output/feature_importance_top30.png` — 피처 중요도 시각화
 - `output/eda_*.png` — EDA 시각화 6개
+
+## Phase 1: 시계열 피처 추가 (run_phase1.py)
+
+### 추가 피처
+- Lag 피처 (1,2,3슬롯): 8개 핵심 피처 x 3 = 24개
+- Rolling 피처 (window 3,5): mean + std = 8 x 4 = 32개
+- Diff 피처: 4개
+- Cumsum 피처: 4개
+- **시계열 피처 합계: 64개**, 총 피처: 186개
+
+### CV MAE: 8.8508 (Public MAE: 10.249, 14위/249명)
+
+## Phase 2: 멀티모델 앙상블 (run_phase2.py)
+
+### 모델별 CV MAE
+
+| 모델 | Fold 1 | Fold 2 | Fold 3 | Fold 4 | Fold 5 | 평균 MAE |
+|------|--------|--------|--------|--------|--------|---------|
+| LightGBM | 8.9732 | 8.8579 | 9.3478 | 8.3185 | 8.7567 | **8.8508** |
+| CatBoost (depth=6) | 9.0069 | 8.8770 | 9.3985 | 8.3601 | 8.7651 | **8.8815** |
+| XGBoost (depth=6) | 8.9784 | 8.8997 | 9.4738 | 8.4118 | 8.7994 | **8.9126** |
+
+### 앙상블 결과
+- **최적 가중치**: LightGBM=0.52, CatBoost=0.33, XGBoost=0.15
+- **Ensemble CV MAE: 8.8253**
+- Phase 1 대비 개선: 8.8508 → 8.8253 (0.0255 개선)
+- 베이스라인 대비 개선: 9.1820 → 8.8253 (0.3567 개선)
+
+### 버그 수정
+- test 행 순서 불일치 버그 수정 (original_idx 보존 후 복원)
+- ID 순서 assert 검증 통과
+
+### 생성된 파일
+- `output/submission_phase2.csv` — 앙상블 예측
+- `output/feature_importance_phase2.png` — 피처 중요도 시각화
+
+## Phase 3A: 일반화 강화 (run_phase3a.py)
+
+### 실험 내용
+1. **피처 선택**: 중요도 하위 30% 피처 제거
+2. **정규화 강화**: LGB/Cat/XGB 모두 정규화 파라미터 강화
+3. **layout 파생 피처**: robot_per_packstation, charger_density, intersection_density, robot_compactness, dispersion_robot
+4. **layout GroupKFold**: unseen layout 시뮬레이션 검증
+
+### 결과 (실행 후 업데이트 필요)
+- 실험 0 (기준선): LGB CV MAE ?.????
+- 실험 1 (피처 선택): LGB CV MAE ?.????
+- 실험 2 (정규화 강화): LGB CV MAE ?.????
+- 실험 3 (layout 피처): LGB CV MAE ?.????
+- 실험 4 (layout GKF): LGB CV MAE ?.????
+- 최종 앙상블 CV MAE: ?.????
+- Phase 2 앙상블: 8.8253
+
+### 생성된 파일
+- `output/submission_phase3a.csv` — Phase 3A 앙상블 예측
+- `output/feature_importance_phase3a.png` — 피처 중요도 시각화
