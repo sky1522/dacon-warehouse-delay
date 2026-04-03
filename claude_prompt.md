@@ -1,88 +1,89 @@
-# 데이콘 스마트 창고 출고 지연 예측 — Phase 3A: 일반화 강화
+# 데이콘 스마트 창고 출고 지연 예측 — Phase 3B: 잔차 분석 기반 개선 + Optuna
 
 ## 프로젝트 경로
 C:\dev\dacon-warehouse-delay\
 
 ## 현재 상태
-- Phase 2 CV MAE: 8.825, Public MAE: 10.224 (19위)
-- CV-Public 갭: 1.40 → 이 갭을 줄이는 것이 최우선 과제
-- 앙상블: LightGBM(0.52) + CatBoost(0.33) + XGBoost(0.15)
-- 피처: 186개
-- test에 train에 없는 layout 50개 포함 (unseen layout 일반화 문제)
+- 최고 Public MAE: 10.224 (Phase 2)
+- CV MAE: 8.825 (앙상블)
+- 핵심 문제: 50분+ 극단 지연(전체 8%)에서 MAE 33~134. 94%가 과소예측.
+- 후반 슬롯(19-24)에서 에러 집중 (MAE 10.5 vs 초반 6.9)
 - 참고 코드: run_phase2.py
 
-## ⚠️ ID 순서 버그 방지
-- concat+sort 후 test 분리 시 반드시 원본 ID 순서 복원
-- 제출 파일 생성 시: assert (submission['ID'] == sample_sub['ID']).all()
+## ⚠️ ID 순서 버그 방지 + 실행 관련
+- concat+sort 후 test 분리 시 원본 ID 순서 복원 필수
+- assert (submission['ID'] == sample_sub['ID']).all()
+- run_phase3b.py 파일 작성만 할 것. 실행하지 말 것.
 
-## ⚠️ 실행 관련
-- run_phase3a.py 파일 작성만 할 것. 실행하지 말 것.
-- 실행은 내가 직접 PowerShell에서 수행
-- 파일 작성 완료 후 "스크립트 작성 완료" 안내
+## 수행 작업 (run_phase3b.py)
 
-## 수행 작업 (run_phase3a.py)
+### 1. 데이터 준비
+- run_phase2.py와 동일한 로직 재사용 (데이터 로드 + 시계열 피처 + layout 조인)
 
-### 1. 피처 정리 — 중요도 기반 피처 선택
-- run_phase2.py의 LightGBM 피처 중요도 기준
-- 중요도 하위 30% 피처 제거 → 노이즈 줄이기
-- 제거 전후 피처 수 출력
-- 제거 후 LightGBM 단독 CV MAE 비교 (제거 전 vs 후)
+### 2. 잔차 분석 기반 신규 피처 추가 (Codex 분석에서 발견)
+아래 인터랙션 피처를 train/test 모두에 추가:
+- orders_per_packstation = order_inflow_15m / pack_station_count
+- pack_dock_pressure = pack_utilization * loading_dock_util
+- dock_wait_pressure = outbound_truck_wait_min * loading_dock_util
+- shift_load_pressure = prev_shift_volume * order_inflow_15m
+- battery_congestion = low_battery_ratio * congestion_score
+- storage_density_congestion = storage_density_pct * congestion_score
+- battery_trip_pressure = low_battery_ratio * avg_trip_distance
+- demand_density = order_inflow_15m * max_zone_density
+(나눗셈 시 분모가 0이면 NaN 처리, LightGBM이 자체 처리)
 
-### 2. 정규화 강화 — 과적합 방지
-세 모델 모두 정규화 파라미터 강화:
+### 3. 극단값 대응 — 듀얼 모델 전략
+**모델 A: 기본 모델 (전체 데이터)**
+- LightGBM, log1p target, objective=mae
 
-**LightGBM:**
-- reg_alpha=0.1, reg_lambda=1.0, min_child_samples=50
-- feature_fraction=0.7, bagging_fraction=0.7, bagging_freq=5
+**모델 B: 고지연 특화 모델 (타겟 >= 20분인 행만 학습)**
+- LightGBM, log1p target, objective=mae
+- 고지연 패턴에 집중하여 극단값 예측력 강화
 
-**CatBoost:**
-- l2_leaf_reg=5.0, min_data_in_leaf=50
-- subsample=0.7, colsample_bylevel=0.7
+**최종 예측 결합:**
+- 모델 A 예측값이 20 미만이면 모델 A 사용
+- 모델 A 예측값이 20 이상이면 모델 B 예측값 사용
+- 임계값(20)도 CV 기준으로 최적화 (10, 15, 20, 25, 30 비교)
 
-**XGBoost:**
-- reg_alpha=0.1, reg_lambda=1.0, min_child_weight=50
-- subsample=0.7, colsample_bytree=0.7
+### 4. Optuna 튜닝 (모델 A만, 50 trials)
+탐색 범위:
+- num_leaves: 31~255
+- max_depth: 4~12
+- learning_rate: 0.01~0.1 (log uniform)
+- n_estimators: 고정 3000, early_stopping_rounds=100
+- min_child_samples: 10~100
+- reg_alpha: 1e-3~10.0 (log uniform)
+- reg_lambda: 1e-3~10.0 (log uniform)
+- feature_fraction: 0.5~0.9
+- bagging_fraction: 0.5~0.9
+- bagging_freq: 1~7
 
-### 3. unseen layout 대응 — layout 피처 강화
-test에 train에 없는 layout 50개가 있으므로:
-- layout_id 자체를 피처로 사용하지 않을 것 (이미 제외되어 있지만 재확인)
-- layout 메타데이터 기반 파생 피처 추가:
-  * robot_total / pack_station_count (로봇 대비 패킹 스테이션 비율)
-  * charger_count / floor_area_sqm (면적당 충전기 밀도)
-  * intersection_count / floor_area_sqm (면적당 교차로 밀도)
-  * robot_total * layout_compactness (로봇수 × 밀집도 인터랙션)
-  * zone_dispersion * robot_total (분산도 × 로봇수)
-- layout_type별 통계가 아닌, 수치형 layout 피처 위주로 활용
-
-### 4. 추가 검증 실험 — layout 기반 GroupKFold
-- 기존 scenario_id GroupKFold 외에 layout_id GroupKFold도 테스트
-- layout_id 기반 CV가 unseen layout 상황을 더 잘 시뮬레이션하는지 확인
-- 두 검증 방식의 MAE 비교 출력
-- 더 나은 쪽을 최종 검증 전략으로 채택
+목적함수: scenario_id GroupKFold 5-Fold MAE
+매 10 trial마다 현재 best 출력
 
 ### 5. 최종 앙상블
-- 피처 선택 + 정규화 강화 + layout 피처 추가 적용
-- 3모델 앙상블 (가중치 재최적화)
-- 최종 CV MAE 출력
+- Optuna best params로 LightGBM 학습
+- CatBoost, XGBoost도 기본 파라미터로 학습 (신규 피처 포함)
+- 3모델 앙상블 가중치 최적화
+- 듀얼 모델 전략 적용 여부도 CV 비교 후 결정
 
-### 6. 결과 비교 테이블
-=== Phase 3A 결과 ===
-실험 1 (피처 선택): LGB CV MAE X.XXXX (186→N개 피처)
-실험 2 (정규화 강화): LGB CV MAE X.XXXX
-실험 3 (layout 피처 추가): LGB CV MAE X.XXXX
-실험 4 (layout GroupKFold): LGB CV MAE X.XXXX
-최종 앙상블 CV MAE: X.XXXX
-Phase 2 앙상블:     8.8253
-개선폭:             X.XXXX
+### 6. 결과 비교
+=== Phase 3B 결과 ===
+신규 피처 추가 효과: LGB CV MAE X.XXXX (vs Phase2 8.8508)
+듀얼 모델 (최적 임계값): CV MAE X.XXXX
+Optuna 최적 LGB: CV MAE X.XXXX (best params: {...})
+최종 앙상블: CV MAE X.XXXX
+Phase 2 앙상블: 8.8253
 
 ### 7. 제출 파일
-- output/submission_phase3a.csv 생성
-- ID 순서 assert 검증 필수
+- output/submission_phase3b.csv
+- ID 순서 assert 검증
 
 ## 규칙
 - 시각화 한글 폰트 적용
 - 모든 MAE print 출력
-- 결과를 claude_results.md에 Phase 3A 섹션 추가
-- run_phase3a.py 작성만 하고 실행하지 말 것
-- 커밋 메시지: "feat: Phase 3A - generalization improvement"
+- Optuna: optuna.logging.set_verbosity(optuna.logging.WARNING)
+- 결과를 claude_results.md에 Phase 3B 섹션 추가
+- run_phase3b.py 작성만 하고 실행하지 말 것
+- 커밋 메시지: "feat: Phase 3B - residual-based features + dual model + Optuna"
 - 커밋 + 푸시

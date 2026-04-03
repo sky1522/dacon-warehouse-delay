@@ -94,3 +94,22 @@
 ### 생성된 파일
 - `output/submission_phase3a.csv` — Phase 3A 앙상블 예측
 - `output/feature_importance_phase3a.png` — 피처 중요도 시각화
+
+## Phase 3B: 잔차 분석 기반 개선 + Optuna (run_phase3b.py)
+
+### 실험 내용
+1. **잔차 기반 신규 피처 8개**: orders_per_packstation, pack_dock_pressure, dock_wait_pressure, shift_load_pressure, battery_congestion, storage_density_congestion, battery_trip_pressure, demand_density
+2. **듀얼 모델 전략**: 기본 모델 + 고지연 특화 모델 (임계값 최적화)
+3. **Optuna 튜닝**: LightGBM 50 trials
+4. **3모델 앙상블**: Optuna LGB + CatBoost + XGBoost
+
+### 결과 (실행 후 업데이트 필요)
+- 신규 피처 효과: LGB CV MAE ?.???? (vs Phase2 8.8508)
+- 듀얼 모델: CV MAE ?.????
+- Optuna 최적 LGB: CV MAE ?.????
+- 최종 앙상블 CV MAE: ?.????
+- Phase 2 앙상블: 8.8253
+
+### 생성된 파일
+- `output/submission_phase3b.csv` — Phase 3B 앙상블 예측
+- `output/feature_importance_phase3b.png` — 피처 중요도 시각화
