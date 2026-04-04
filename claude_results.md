@@ -113,3 +113,25 @@
 ### 생성된 파일
 - `output/submission_phase3b.csv` — Phase 3B 앙상블 예측
 - `output/feature_importance_phase3b.png` — 피처 중요도 시각화
+
+## Phase 5: Kaggle 우승 전략 적용 (run_phase5.py)
+
+### 실험 내용
+1. **대량 GroupBy 피처**: 4 그룹키 × 15 집계대상 × 5 통계 = 300개 피처 생성
+2. **타겟 Lag 피처**: target_lag1~3, target_roll3_mean, target_cummax, target_cummean
+3. **피처 선별**: 중요도 상위 300개 선택
+4. **모델 A**: LightGBM (Optuna params, GroupBy 피처, 타겟lag 제외)
+5. **모델 B**: LightGBM (타겟 Lag 포함, test 재귀 예측)
+6. **CatBoost**: 모델 A 피처
+7. **3모델 앙상블**: 가중치 최적화
+
+### 결과 (실행 후 업데이트 필요)
+- 모델 A: CV MAE ?.????
+- 모델 B: CV MAE ?.???? (train 실제값 기준, 낙관적)
+- CatBoost: CV MAE ?.????
+- 최종 앙상블 CV MAE: ?.????
+- Phase 3B 앙상블: 8.786
+
+### 생성된 파일
+- `output/submission_phase5.csv` — Phase 5 앙상블 예측
+- `output/feature_importance_phase5.png` — 피처 중요도 시각화
