@@ -333,6 +333,7 @@ scenario_ids = test_recursive['scenario_id'].unique()
 n_scenarios = len(scenario_ids)
 
 lgb_b_test = np.full(len(test_recursive), np.nan)
+idx_to_pos = {idx: pos for pos, idx in enumerate(test_recursive.index)}
 t0 = time.time()
 
 for s_idx, sid in enumerate(scenario_ids):
@@ -365,7 +366,7 @@ for s_idx, sid in enumerate(scenario_ids):
         pred_log = m_b_full.predict(X_row)[0]
         pred = max(np.expm1(pred_log), 0)
         predictions.append(pred)
-        lgb_b_test[idx] = pred
+        lgb_b_test[idx_to_pos[idx]] = pred
 
     if (s_idx + 1) % 500 == 0:
         elapsed = time.time() - t0

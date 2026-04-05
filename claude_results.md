@@ -135,3 +135,29 @@
 ### 생성된 파일
 - `output/submission_phase5.csv` — Phase 5 앙상블 예측
 - `output/feature_importance_phase5.png` — 피처 중요도 시각화
+
+## Phase 6: 도메인 지식 기반 피처 + Optuna 재튜닝 (run_phase6.py)
+
+### 실험 내용
+1. **도메인 기반 신규 피처 22개**:
+   - A) 체인 병목 감지 (5개): picking_packing_gap, packing_shipping_gap, chain_pressure, picking_bottleneck, shipping_bottleneck
+   - B) 로봇 가용 용량 (5개): available_capacity, charging_return_ratio, robot_shortage, effective_robot_ratio, robot_demand_balance
+   - C) 누적 피로도 (5개): scenario_progress, battery_drain_rate, congestion_acceleration, late_scenario_flag, fatigue_index
+   - D) 주문×창고 궁합 (5개): complex_in_narrow, urgent_pack_pressure, heavy_height_penalty, sku_per_intersection, order_density_per_area
+   - E) 종합 위험도 (2개): risk_score, capacity_stress
+2. **Optuna 재튜닝**: 50 trials (도메인 피처 포함)
+3. **타겟 변환 비교**: log1p / sqrt / raw+mae / raw+huber
+4. **2모델 앙상블**: LightGBM + CatBoost 가중치 최적화
+
+### 결과 (실행 후 업데이트 필요)
+- 도메인 피처 추가 (기존 params): LGB CV MAE ?.???? (vs Phase3B 8.7908)
+- Optuna 재튜닝 후: LGB CV MAE ?.????
+- 최적 타겟 변환: [?] CV MAE ?.????
+- LightGBM 최종: CV MAE ?.????
+- CatBoost: CV MAE ?.????
+- 앙상블: CV MAE ?.????
+- Phase 3B 대비 개선: ?.????
+
+### 생성된 파일
+- `output/submission_phase6.csv` — Phase 6 앙상블 예측
+- `output/feature_importance_phase6.png` — 피처 중요도 시각화
