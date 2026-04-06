@@ -218,3 +218,29 @@
 ### 생성된 파일
 - `output/submission_phase8.csv` — Phase 8 최종 예측
 - `output/feature_importance_phase8.png` — 피처 중요도 시각화
+
+## Phase 9: Optuna 재튜닝 + Seed Blending + 스태킹 (run_phase9.py)
+
+### 핵심 전략
+1. **Optuna 재튜닝**: 319개 피처 기준 30 trials (기존은 194개 피처 기준)
+2. **Multi-Seed Blending**: 6모델 × 3 seeds (42, 123, 777) → seed 평균으로 안정성 향상
+3. **Level 2 LGB 스태킹**: 6 OOF + 핵심 6개 원본 피처 = 12개 메타 피처
+
+### 6모델 구성 (Phase 8 동일 + Optuna NEW params)
+- 모델 1: LGB raw+MAE (Optuna NEW)
+- 모델 2: LGB log1p+Huber
+- 모델 3: LGB sqrt+MAE
+- 모델 4: XGB raw+MAE
+- 모델 5: CatBoost log1p+MAE
+- 모델 6: CatBoost raw+MAE
+
+### 결과 (실행 후 업데이트 필요)
+- Optuna 재튜닝: ?.???? (기존 8.7494)
+- 모델별 seed-averaged CV MAE: 각 ?.????
+- Level 1 가중 평균: ?.????
+- Level 2 LGB 스태킹: ?.????
+- Phase 8 대비 개선: ?.????
+
+### 생성된 파일
+- `output/submission_phase9.csv` — Phase 9 최종 예측
+- `output/feature_importance_phase9.png` — 피처 중요도 시각화
