@@ -187,3 +187,34 @@
 ### 생성된 파일
 - `output/submission_phase7.csv` — Phase 7 앙상블 예측
 - `output/feature_importance_phase7.png` — 피처 중요도 시각화
+
+## Phase 8: 경쟁자 피처 완전 적용 + 스태킹 (run_phase8.py)
+
+### 핵심 전략
+1. **경쟁자 피처 54개**: 로봇상태분해(6) + 수요용량비율(15) + 복합인터랙션(12) + layout밀도(8) + missing(3) + rolling편차(10)
+2. **Expanding 확장 20개**: 핵심 10개 컬럼에 expanding std + max
+3. **2단계 스태킹**: 6모델 OOF → Ridge/LGB 메타 모델
+
+### Level 1: 6모델
+- 모델 1: LightGBM raw+MAE (Optuna params)
+- 모델 2: LightGBM log1p+Huber
+- 모델 3: LightGBM sqrt+MAE (신규)
+- 모델 4: XGBoost raw+MAE
+- 모델 5: CatBoost log1p+MAE
+- 모델 6: CatBoost raw+MAE (신규)
+
+### Level 2: 스태킹 메타 모델
+- Ridge (alpha=1.0) + LGB 소규모 (num_leaves=16)
+- 메타 피처: 6 OOF + implicit_timeslot + 핵심 5개 = 12개
+
+### 결과 (실행 후 업데이트 필요)
+- Level 1 모델별 CV MAE: 각 ?.????
+- Level 1 가중 평균: CV MAE ?.????
+- Ridge 스태킹: CV MAE ?.????
+- LGB 스태킹: CV MAE ?.????
+- 최종 선택: ?.????
+- Phase 7 대비 개선: ?.????
+
+### 생성된 파일
+- `output/submission_phase8.csv` — Phase 8 최종 예측
+- `output/feature_importance_phase8.png` — 피처 중요도 시각화
