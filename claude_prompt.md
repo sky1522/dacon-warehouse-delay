@@ -1,134 +1,183 @@
-# 데이콘 스마트 창고 출고 지연 예측 — Phase 6: 도메인 지식 기반 피처 + Optuna
+# 데이콘 스마트 창고 출고 지연 예측 — Phase 7: 우승 전략 통합
 
 ## 프로젝트 경로
 C:\dev\dacon-warehouse-delay\
 
 ## 현재 상태
 - 최고 Public MAE: 10.203 (Phase 3B)
-- 최고 CV MAE: 8.786 (Phase 3B, LGB+Cat 앙상블)
-- 피처: 194개 (기존 122 + 시계열 64 + 인터랙션 8)
-- Optuna best params: learning_rate=0.0129, num_leaves=185, max_depth=9, min_child_samples=80, reg_alpha=0.0574, reg_lambda=0.0042, feature_fraction=0.6005, bagging_fraction=0.7663, bagging_freq=1
-- 참고 코드: run_phase3b.py (가장 좋은 Public 점수의 코드)
-- Phase 5의 재귀 예측은 실패 → 재귀 예측 사용하지 말 것
-- Phase 5의 GroupBy 300개 피처도 CV 개선 없었음 → 대량 groupby 대신 도메인 기반 정밀 피처
+- 최고 CV MAE: 8.786 (Phase 3B)
+- 참고 코드: run_phase3b.py (최고 성능 코드, 이걸 기반으로 확장)
+- Optuna best params (LGB): learning_rate=0.0129, num_leaves=185, max_depth=9, min_child_samples=80, reg_alpha=0.0574, reg_lambda=0.0042, feature_fraction=0.6005, bagging_fraction=0.7663, bagging_freq=1
 
 ## ⚠️ 필수 사항
 - concat+sort 후 test 분리 시 원본 ID 순서 복원 필수
 - assert (submission['ID'] == sample_sub['ID']).all()
-- run_phase6.py 파일 작성만 할 것. 실행하지 말 것.
+- run_phase7.py 파일 작성만 할 것. 실행하지 말 것.
+- float32로 메모리 최적화 (RAM 8GB 환경)
 - 중간 진행상황 print 충분히 포함
 
-## 핵심 전략: 도메인 지식 기반 피처 엔지니어링
-스마트 창고 출고 프로세스: 주문접수 → 피킹(로봇) → 패킹(포장) → 스테이징 → 트럭 적재 → 출고
-지연은 이 체인의 병목에서 발생. 각 단계의 수요/용량 불균형과 연쇄 반응을 피처로 표현.
+## 핵심 전략 3가지 (경쟁자 코드 분석 + 우리 도메인 분석 기반)
 
-## 수행 작업 (run_phase6.py)
+### 전략 1: 샘플 가중치 (Sample Weight)
+우리 Codex 분석에서 핵심 문제: 50분+ 극단값에서 MAE 33~134, 94% 과소예측.
+극단값 행에 높은 가중치를 줘서 모델이 더 집중하게 함.
+
+### 전략 2: 다양한 변환+목적함수 앙상블
+같은 데이터를 다른 시각으로 보는 모델들을 섞으면 다양성 극대화.
+지금까지 log1p+MAE만 사용했으므로 변환/목적함수 조합을 다양화.
+
+### 전략 3: 새로운 시계열 피처 (Onset + Expanding Mean)
+현재 상태뿐 아니라 "언제 상태 변화가 시작됐는가", "시나리오 전체 추세에서 현재가 얼마나 벗어났는가"를 표현.
+
+## 수행 작업 (run_phase7.py)
 
 ### 1. 데이터 준비
-- run_phase3b.py의 데이터 로드 + 시계열 피처(64개) + 기존 인터랙션(8개) 로직 재사용
-- layout_info 조인 포함
-- implicit_timeslot 생성
-- 기존 194개 피처를 베이스로 사용
+- run_phase3b.py의 데이터 로드 + 시계열 피처(64개) + 인터랙션(8개) 로직 재사용
+- layout_info 조인, implicit_timeslot 생성
+- 모든 float64를 float32로 변환하여 메모리 절약
+- 불필요한 중간 DataFrame은 del + gc.collect()로 즉시 해제
 
-### 2. 도메인 기반 신규 피처 추가 (train/test 모두)
+### 2. 신규 피처 추가 — Onset 피처 (상태 변화 시작점 추적)
 
-**A) 체인 병목 감지 피처 (프로세스 단계 간 불균형)**
-- picking_packing_gap = robot_utilization - pack_utilization
-- packing_shipping_gap = pack_utilization - loading_dock_util
-- chain_pressure = order_inflow_15m / (pack_station_count * (loading_dock_util + 0.01))
-- picking_bottleneck = robot_utilization * (1 - pack_utilization)
-- shipping_bottleneck = pack_utilization * loading_dock_util
+시나리오 내에서 "언제 처음으로 특정 상태가 발생했는가"를 추적:
 
-**B) 로봇 가용 용량 피처**
-- available_capacity = robot_idle - (robot_total * low_battery_ratio)
-- charging_return_ratio = robot_charging / (robot_total + 1)
-- robot_shortage = order_inflow_15m / (robot_idle + 1)
-- effective_robot_ratio = (robot_active - robot_charging) / (robot_total + 1)
-- robot_demand_balance = robot_active / (order_inflow_15m + 1)
+**충전 관련 onset:**
+- charging_ever_started: 해당 시나리오에서 robot_charging > 0인 슬롯이 과거에 있었는지 (0/1)
+- charging_start_idx: robot_charging이 처음 0보다 커진 슬롯 번호 (아직이면 -1)
+- charging_steps_since_start: 충전 시작 이후 경과 슬롯 수
+- charging_started_early: 충전이 슬롯 5 이전에 시작됐는지 (0/1)
 
-**C) 누적 피로도 피처 (시나리오 진행에 따른 상태 변화)**
-- scenario_progress = implicit_timeslot / 24.0
-- battery_drain_rate: battery_mean의 diff1을 이미 계산했으면 재사용, 아니면 생성
-- congestion_acceleration: congestion_score의 diff1 (혼잡 증가 속도)
-- late_scenario_flag = (implicit_timeslot >= 19).astype(int)
-- fatigue_index = scenario_progress * (1 - battery_mean/100) (진행률 × 배터리 소진)
+**대기열 관련 onset:**
+- queue_ever_started: charge_queue_length > 0인 슬롯이 과거에 있었는지
+- queue_start_idx: 대기열이 처음 발생한 슬롯 번호
 
-**D) 주문 특성 × 창고 구조 궁합 피처**
-- complex_in_narrow = avg_items_per_order / (aisle_width_avg + 0.01)
-- urgent_pack_pressure = urgent_order_ratio * order_inflow_15m / (pack_station_count + 1)
-- heavy_height_penalty = heavy_item_ratio * racking_height_avg_m
-- sku_per_intersection = unique_sku_15m / (intersection_count + 1)
-- order_density_per_area = order_inflow_15m / (floor_area_sqm + 1) * 10000
+**혼잡 관련 onset:**
+- congestion_ever_started: congestion_score > 0인 슬롯이 과거에 있었는지
+- congestion_start_idx: 혼잡이 처음 발생한 슬롯 번호
 
-**E) 종합 위험도 지표**
-- risk_score = (low_battery_ratio * 0.3 + congestion_score/100 * 0.3 + pack_utilization * 0.2 + loading_dock_util * 0.2)
-- capacity_stress = (robot_utilization + pack_utilization + loading_dock_util) / 3
+구현: 각 피처에 대해 groupby(scenario_id) 내에서 shift(1)한 값의 cummax/cummin으로 계산. 미래 정보 사용하지 않도록 반드시 shift(1) 적용.
 
-나눗셈 시 분모에 작은 값(0.01 또는 1) 더해서 ZeroDivision 방지.
-NaN은 LightGBM이 자체 처리하므로 그대로 둘 것.
-생성된 피처 수와 이름 목록 출력.
+### 3. 신규 피처 추가 — Expanding Mean (누적 평균 + 이탈)
 
-### 3. LightGBM 단독 CV (도메인 피처 효과 확인)
-- Phase 3B Optuna params 사용
-- scenario_id GroupKFold 5-Fold, log1p target
-- CV MAE 출력
-- "도메인 피처 추가 전(Phase 3B): 8.7908 → 추가 후: X.XXXX" 출력
+시나리오 시작부터 현재까지의 누적 통계와 현재값의 차이:
 
-### 4. Optuna 재튜닝 (도메인 피처 포함, 50 trials)
-탐색 범위:
-- num_leaves: 31~255
-- max_depth: 4~12
-- learning_rate: 0.01~0.1 (log uniform)
-- n_estimators: 고정 3000, early_stopping_rounds=100
-- min_child_samples: 10~100
-- reg_alpha: 1e-3~10.0 (log uniform)
-- reg_lambda: 1e-3~10.0 (log uniform)
-- feature_fraction: 0.5~0.9
-- bagging_fraction: 0.5~0.9
-- bagging_freq: 1~7
+대상 컬럼 (핵심 15개):
+order_inflow_15m, unique_sku_15m, avg_items_per_order, urgent_order_ratio,
+heavy_item_ratio, robot_active, battery_mean, low_battery_ratio,
+congestion_score, max_zone_density, pack_utilization, loading_dock_util,
+charge_queue_length, fault_count_15m, avg_trip_distance
 
-목적함수: scenario_id GroupKFold 5-Fold MAE (log1p → expm1)
-optuna.logging.set_verbosity(optuna.logging.WARNING)
-매 10 trial마다 best MAE 출력
-sampler=optuna.samplers.TPESampler(seed=42)
+각 컬럼에 대해:
+- {col}_expmean_prev: shift(1) 후 expanding().mean() — 과거 슬롯들의 평균
+- {col}_delta_expmean: 현재값 - expmean_prev — 누적 평균 대비 이탈
 
-### 5. 타겟 변환 비교 (Optuna best params로)
-- log1p (현재)
-- sqrt
-- 변환 없음 + objective='mae'
-- 변환 없음 + objective='huber' (alpha=10)
-각각 5-Fold CV MAE 비교 출력
+총 30개 피처 추가.
 
-### 6. 최종 앙상블
-- 최적 변환 + Optuna best params로 LightGBM 학습
-- CatBoost 학습 (같은 피처, 기본 params)
-- 2모델 앙상블 가중치 최적화
-- 최종 CV MAE 출력
+### 4. 신규 피처 추가 — 비선형 임계값 피처
 
-### 7. 결과 비교 테이블
-=== Phase 6 결과 ===
-도메인 피처 추가 후 (기존 params):  LGB CV MAE X.XXXX (vs Phase3B 8.7908)
-Optuna 재튜닝 후:                   LGB CV MAE X.XXXX
-최적 타겟 변환:                     [방법명] CV MAE X.XXXX
-LightGBM 최종:                      CV MAE X.XXXX
-CatBoost:                           CV MAE X.XXXX
-앙상블:                             CV MAE X.XXXX
-Phase 3B 대비 개선:                 X.XXXX
-총 피처 수:                         N개
-도메인 피처 중 중요도 Top 30 진입:  N개
+특정 임계값을 넘으면 지연이 급증하는 비선형 관계 표현:
 
-### 8. 제출 파일
-- output/submission_phase6.csv
+- battery_mean_below_44: max(44.0 - battery_mean, 0) — 배터리 44% 이하 심각도
+- low_battery_ratio_above_02: max(low_battery_ratio - 0.2, 0) — 저배터리 비율 20% 초과분
+- pack_utilization_sq: pack_utilization ** 2 — 패킹 활용률 비선형 효과
+- loading_dock_util_sq: loading_dock_util ** 2
+- congestion_score_sq: congestion_score ** 2
+- charge_pressure: (robot_charging + charge_queue_length) / (charger_count + 1)
+- charge_pressure_sq: charge_pressure ** 2
+
+### 5. 시간대별 위상 피처 (Phase Indicator)
+- is_early_phase: implicit_timeslot <= 5 (0/1)
+- is_mid_phase: 6 <= implicit_timeslot <= 15 (0/1)
+- is_late_phase: implicit_timeslot >= 16 (0/1)
+- time_frac: implicit_timeslot / 24.0
+- time_remaining: 24 - implicit_timeslot
+- time_frac_sq: time_frac ** 2
+
+### 6. 샘플 가중치 함수 구현
+```python
+def build_sample_weight(y, time_idx):
+    w = np.ones(len(y), dtype=np.float32)
+    q90 = np.nanquantile(y, 0.90)
+    q95 = np.nanquantile(y, 0.95)
+    q99 = np.nanquantile(y, 0.99)
+    w += 0.15 * (y >= q90).astype(np.float32)
+    w += 0.30 * (y >= q95).astype(np.float32)
+    w += 0.60 * (y >= q99).astype(np.float32)
+    # 후반 타임슬롯 가중치
+    if time_idx is not None:
+        w += 0.08 * (time_idx / 24.0).astype(np.float32)
+    return w
+```
+
+LightGBM: fit(X, y, sample_weight=w)
+CatBoost: Pool(X, y, weight=w)
+XGBoost: fit(X, y, sample_weight=w)
+
+### 7. 4모델 앙상블 — 다양한 변환+목적함수
+
+**모델 1: LightGBM + 변환 없음 + objective='mae'**
+- Optuna best params 사용
+- target_transform='none'
+- sample_weight 적용
+
+**모델 2: LightGBM + log1p + objective='huber' (alpha=0.9)**
+- n_estimators=2000, learning_rate=0.03, num_leaves=128
+- min_child_samples=60, subsample=0.9, colsample_bytree=0.85
+- reg_alpha=0.05, reg_lambda=1.0
+- sample_weight 적용
+
+**모델 3: XGBoost + 변환 없음 + objective='reg:absoluteerror'**
+- n_estimators=2000, learning_rate=0.03, max_depth=8
+- min_child_weight=6, subsample=0.9, colsample_bytree=0.85
+- reg_lambda=1.5, reg_alpha=0.05
+- sample_weight 적용
+
+**모델 4: CatBoost + log1p + loss_function='MAE'**
+- iterations=2000, learning_rate=0.03, depth=8
+- l2_leaf_reg=5.0, subsample=0.9
+- sample_weight 적용
+
+각 모델 scenario_id GroupKFold 5-Fold:
+- OOF 예측 저장
+- Fold별 MAE 출력
+- 평균 CV MAE 출력
+
+### 8. 앙상블 가중치 최적화
+- 4개 OOF 예측으로 scipy.optimize.minimize
+- 제약: 가중치 합 = 1, 각 >= 0
+- 최적 가중치와 앙상블 CV MAE 출력
+
+### 9. 결과 비교 테이블
+=== Phase 7 결과 ===
+신규 피처 수: onset N개 + expanding N개 + 비선형 N개 + 위상 N개 = 총 N개
+총 피처 수: N개
+모델별 CV MAE:
+LGB raw+MAE:        X.XXXX
+LGB log1p+Huber:    X.XXXX
+XGB raw+MAE:        X.XXXX
+CatBoost log1p+MAE: X.XXXX
+앙상블 가중치: lgb_raw=X.XX, lgb_huber=X.XX, xgb=X.XX, cat=X.XX
+앙상블 CV MAE: X.XXXX
+Phase 3B 대비 개선: X.XXXX
+샘플 가중치 효과:
+가중치 적용 전: X.XXXX
+가중치 적용 후: X.XXXX
+
+### 10. 제출 파일
+- output/submission_phase7.csv
 - ID 순서 assert 검증
 
-### 9. 피처 중요도
-- Top 30 시각화 → output/feature_importance_phase6.png
-- 도메인 피처가 Top 30에 몇 개 진입했는지 별도 출력
+### 11. 피처 중요도
+- 모델 1 (LGB raw+MAE) 기준 Top 30 시각화
+- output/feature_importance_phase7.png
+- 신규 피처 중 Top 30 진입 개수 출력
 
 ## 규칙
-- 시각화 한글 폰트 적용
+- 시각화 한글 폰트 적용 (한글 폰트가 없으면 영문으로 대체)
 - 모든 MAE print 출력
-- 결과를 claude_results.md에 Phase 6 섹션 추가
-- run_phase6.py 작성만 하고 실행하지 말 것
-- 커밋 메시지: "feat: Phase 6 - domain knowledge features + Optuna retuning"
+- 중간 진행상황 print 충분히 포함
+- n_estimators=2000, early_stopping_rounds=100
+- 결과를 claude_results.md에 Phase 7 섹션 추가
+- run_phase7.py 작성만 하고 실행하지 말 것
+- 커밋 메시지: "feat: Phase 7 - sample weight + diverse ensemble + onset features"
 - 커밋 + 푸시

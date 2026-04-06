@@ -161,3 +161,29 @@
 ### 생성된 파일
 - `output/submission_phase6.csv` — Phase 6 앙상블 예측
 - `output/feature_importance_phase6.png` — 피처 중요도 시각화
+
+## Phase 7: 우승 전략 통합 (run_phase7.py)
+
+### 핵심 전략
+1. **샘플 가중치**: q90/q95/q99 극단값에 높은 가중치 + 후반 타임슬롯 가중치
+2. **다양한 변환+목적함수 앙상블**: 4모델 다양성 극대화
+3. **신규 시계열 피처**: Onset(8개) + Expanding Mean(30개) + 비선형 임계값(7개) + 시간 위상(6개) = 51개
+
+### 4모델 구성
+- 모델 1: LightGBM raw+MAE (Optuna params)
+- 모델 2: LightGBM log1p+Huber (alpha=0.9)
+- 모델 3: XGBoost raw+MAE
+- 모델 4: CatBoost log1p+MAE (depth=8)
+
+### 결과 (실행 후 업데이트 필요)
+- 샘플 가중치 효과: 적용 전 ?.???? → 적용 후 ?.????
+- LGB raw+MAE: CV MAE ?.????
+- LGB log1p+Huber: CV MAE ?.????
+- XGB raw+MAE: CV MAE ?.????
+- CatBoost log1p+MAE: CV MAE ?.????
+- 앙상블: CV MAE ?.????
+- Phase 3B 대비 개선: ?.????
+
+### 생성된 파일
+- `output/submission_phase7.csv` — Phase 7 앙상블 예측
+- `output/feature_importance_phase7.png` — 피처 중요도 시각화
