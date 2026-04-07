@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import gc
+import pickle
+import os
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -321,133 +323,194 @@ cv_maes = {}
 
 # 모델 1: LightGBM raw+MAE (Optuna params)
 print("\n  [모델 1] LGB raw+MAE...", flush=True)
-m1_oof = np.zeros(len(X), dtype=np.float32)
-m1_test = np.zeros(len(X_test), dtype=np.float32)
-m1_models = []
-for fold_i, (tr_idx, va_idx) in enumerate(folds):
-    m = lgb.LGBMRegressor(
-        objective='mae', n_estimators=2000, learning_rate=0.0129,
-        num_leaves=185, max_depth=9, min_child_samples=80,
-        reg_alpha=0.0574, reg_lambda=0.0042,
-        feature_fraction=0.6005, bagging_fraction=0.7663, bagging_freq=1,
-        random_state=42, n_jobs=-1, verbose=-1)
-    m.fit(X.iloc[tr_idx], y.iloc[tr_idx], sample_weight=sample_w[tr_idx],
-          eval_set=[(X.iloc[va_idx], y.iloc[va_idx])],
-          callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)])
-    pred = np.clip(m.predict(X.iloc[va_idx]), 0, None).astype(np.float32)
-    m1_oof[va_idx] = pred
-    m1_test += np.clip(m.predict(X_test), 0, None).astype(np.float32) / 5
-    m1_models.append(m)
-    print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+ckpt_path = 'output/ckpt_lgb_raw.pkl'
+if os.path.exists(ckpt_path):
+    with open(ckpt_path, 'rb') as f:
+        ckpt = pickle.load(f)
+    m1_oof, m1_test, cv_maes['lgb_raw_mae'] = ckpt['oof'], ckpt['test'], ckpt['cv_mae']
+    m1_models = []
+    print(f"  ⏭️ lgb_raw 캐시 사용 (CV MAE: {cv_maes['lgb_raw_mae']:.4f})", flush=True)
+else:
+    m1_oof = np.zeros(len(X), dtype=np.float32)
+    m1_test = np.zeros(len(X_test), dtype=np.float32)
+    m1_models = []
+    for fold_i, (tr_idx, va_idx) in enumerate(folds):
+        m = lgb.LGBMRegressor(
+            objective='mae', n_estimators=2000, learning_rate=0.0129,
+            num_leaves=185, max_depth=9, min_child_samples=80,
+            reg_alpha=0.0574, reg_lambda=0.0042,
+            feature_fraction=0.6005, bagging_fraction=0.7663, bagging_freq=1,
+            random_state=42, n_jobs=-1, verbose=-1)
+        m.fit(X.iloc[tr_idx], y.iloc[tr_idx], sample_weight=sample_w[tr_idx],
+              eval_set=[(X.iloc[va_idx], y.iloc[va_idx])],
+              callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)])
+        pred = np.clip(m.predict(X.iloc[va_idx]), 0, None).astype(np.float32)
+        m1_oof[va_idx] = pred
+        m1_test += np.clip(m.predict(X_test), 0, None).astype(np.float32) / 5
+        m1_models.append(m)
+        print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+    cv_maes['lgb_raw_mae'] = mean_absolute_error(y, m1_oof)
+    with open(ckpt_path, 'wb') as f:
+        pickle.dump({'oof': m1_oof, 'test': m1_test, 'cv_mae': cv_maes['lgb_raw_mae']}, f)
+    print(f"  ✅ lgb_raw 저장 완료 (CV MAE: {cv_maes['lgb_raw_mae']:.4f})", flush=True)
 oof_preds['lgb_raw_mae'] = m1_oof
 test_preds['lgb_raw_mae'] = m1_test
-cv_maes['lgb_raw_mae'] = mean_absolute_error(y, m1_oof)
 print(f"  모델 1 CV MAE: {cv_maes['lgb_raw_mae']:.4f}", flush=True)
 
 # 모델 2: LightGBM log1p+Huber
 print("\n  [모델 2] LGB log1p+Huber...", flush=True)
-m2_oof = np.zeros(len(X), dtype=np.float32)
-m2_test = np.zeros(len(X_test), dtype=np.float32)
-for fold_i, (tr_idx, va_idx) in enumerate(folds):
-    m = lgb.LGBMRegressor(
-        objective='huber', huber_delta=0.9, n_estimators=2000, learning_rate=0.03,
-        num_leaves=128, min_child_samples=60, subsample=0.9, colsample_bytree=0.85,
-        reg_alpha=0.05, reg_lambda=1.0, random_state=42, n_jobs=-1, verbose=-1)
-    m.fit(X.iloc[tr_idx], y_log.iloc[tr_idx], sample_weight=sample_w[tr_idx],
-          eval_set=[(X.iloc[va_idx], y_log.iloc[va_idx])],
-          callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)])
-    pred = np.clip(np.expm1(m.predict(X.iloc[va_idx])), 0, None).astype(np.float32)
-    m2_oof[va_idx] = pred
-    m2_test += np.clip(np.expm1(m.predict(X_test)), 0, None).astype(np.float32) / 5
-    print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+ckpt_path = 'output/ckpt_lgb_huber.pkl'
+if os.path.exists(ckpt_path):
+    with open(ckpt_path, 'rb') as f:
+        ckpt = pickle.load(f)
+    m2_oof, m2_test, cv_maes['lgb_log1p_huber'] = ckpt['oof'], ckpt['test'], ckpt['cv_mae']
+    print(f"  ⏭️ lgb_huber 캐시 사용 (CV MAE: {cv_maes['lgb_log1p_huber']:.4f})", flush=True)
+else:
+    m2_oof = np.zeros(len(X), dtype=np.float32)
+    m2_test = np.zeros(len(X_test), dtype=np.float32)
+    for fold_i, (tr_idx, va_idx) in enumerate(folds):
+        m = lgb.LGBMRegressor(
+            objective='huber', huber_delta=0.9, n_estimators=2000, learning_rate=0.03,
+            num_leaves=128, min_child_samples=60, subsample=0.9, colsample_bytree=0.85,
+            reg_alpha=0.05, reg_lambda=1.0, random_state=42, n_jobs=-1, verbose=-1)
+        m.fit(X.iloc[tr_idx], y_log.iloc[tr_idx], sample_weight=sample_w[tr_idx],
+              eval_set=[(X.iloc[va_idx], y_log.iloc[va_idx])],
+              callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)])
+        pred = np.clip(np.expm1(m.predict(X.iloc[va_idx])), 0, None).astype(np.float32)
+        m2_oof[va_idx] = pred
+        m2_test += np.clip(np.expm1(m.predict(X_test)), 0, None).astype(np.float32) / 5
+        print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+    cv_maes['lgb_log1p_huber'] = mean_absolute_error(y, m2_oof)
+    with open(ckpt_path, 'wb') as f:
+        pickle.dump({'oof': m2_oof, 'test': m2_test, 'cv_mae': cv_maes['lgb_log1p_huber']}, f)
+    print(f"  ✅ lgb_huber 저장 완료 (CV MAE: {cv_maes['lgb_log1p_huber']:.4f})", flush=True)
 oof_preds['lgb_log1p_huber'] = m2_oof
 test_preds['lgb_log1p_huber'] = m2_test
-cv_maes['lgb_log1p_huber'] = mean_absolute_error(y, m2_oof)
 print(f"  모델 2 CV MAE: {cv_maes['lgb_log1p_huber']:.4f}", flush=True)
 
 # 모델 3: LightGBM sqrt+MAE
 print("\n  [모델 3] LGB sqrt+MAE...", flush=True)
-m3_oof = np.zeros(len(X), dtype=np.float32)
-m3_test = np.zeros(len(X_test), dtype=np.float32)
-for fold_i, (tr_idx, va_idx) in enumerate(folds):
-    m = lgb.LGBMRegressor(
-        objective='mae', n_estimators=2000, learning_rate=0.03,
-        num_leaves=96, min_child_samples=80, subsample=0.9, colsample_bytree=0.85,
-        reg_alpha=0.1, reg_lambda=1.5, random_state=42, n_jobs=-1, verbose=-1)
-    m.fit(X.iloc[tr_idx], y_sqrt.iloc[tr_idx], sample_weight=sample_w[tr_idx],
-          eval_set=[(X.iloc[va_idx], y_sqrt.iloc[va_idx])],
-          callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)])
-    pred = np.clip(m.predict(X.iloc[va_idx]) ** 2, 0, None).astype(np.float32)
-    m3_oof[va_idx] = pred
-    m3_test += np.clip(m.predict(X_test) ** 2, 0, None).astype(np.float32) / 5
-    print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+ckpt_path = 'output/ckpt_lgb_sqrt.pkl'
+if os.path.exists(ckpt_path):
+    with open(ckpt_path, 'rb') as f:
+        ckpt = pickle.load(f)
+    m3_oof, m3_test, cv_maes['lgb_sqrt_mae'] = ckpt['oof'], ckpt['test'], ckpt['cv_mae']
+    print(f"  ⏭️ lgb_sqrt 캐시 사용 (CV MAE: {cv_maes['lgb_sqrt_mae']:.4f})", flush=True)
+else:
+    m3_oof = np.zeros(len(X), dtype=np.float32)
+    m3_test = np.zeros(len(X_test), dtype=np.float32)
+    for fold_i, (tr_idx, va_idx) in enumerate(folds):
+        m = lgb.LGBMRegressor(
+            objective='mae', n_estimators=2000, learning_rate=0.03,
+            num_leaves=96, min_child_samples=80, subsample=0.9, colsample_bytree=0.85,
+            reg_alpha=0.1, reg_lambda=1.5, random_state=42, n_jobs=-1, verbose=-1)
+        m.fit(X.iloc[tr_idx], y_sqrt.iloc[tr_idx], sample_weight=sample_w[tr_idx],
+              eval_set=[(X.iloc[va_idx], y_sqrt.iloc[va_idx])],
+              callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)])
+        pred = np.clip(m.predict(X.iloc[va_idx]) ** 2, 0, None).astype(np.float32)
+        m3_oof[va_idx] = pred
+        m3_test += np.clip(m.predict(X_test) ** 2, 0, None).astype(np.float32) / 5
+        print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+    cv_maes['lgb_sqrt_mae'] = mean_absolute_error(y, m3_oof)
+    with open(ckpt_path, 'wb') as f:
+        pickle.dump({'oof': m3_oof, 'test': m3_test, 'cv_mae': cv_maes['lgb_sqrt_mae']}, f)
+    print(f"  ✅ lgb_sqrt 저장 완료 (CV MAE: {cv_maes['lgb_sqrt_mae']:.4f})", flush=True)
 oof_preds['lgb_sqrt_mae'] = m3_oof
 test_preds['lgb_sqrt_mae'] = m3_test
-cv_maes['lgb_sqrt_mae'] = mean_absolute_error(y, m3_oof)
 print(f"  모델 3 CV MAE: {cv_maes['lgb_sqrt_mae']:.4f}", flush=True)
 
 # 모델 4: XGBoost raw+MAE
 print("\n  [모델 4] XGB raw+MAE...", flush=True)
-m4_oof = np.zeros(len(X), dtype=np.float32)
-m4_test = np.zeros(len(X_test), dtype=np.float32)
-for fold_i, (tr_idx, va_idx) in enumerate(folds):
-    m = xgb.XGBRegressor(
-        n_estimators=2000, learning_rate=0.03, max_depth=8,
-        min_child_weight=6, subsample=0.9, colsample_bytree=0.85,
-        reg_lambda=1.5, reg_alpha=0.05,
-        objective='reg:absoluteerror', eval_metric='mae',
-        tree_method='hist', random_state=42, verbosity=0, early_stopping_rounds=100)
-    m.fit(X.iloc[tr_idx], y.iloc[tr_idx], sample_weight=sample_w[tr_idx],
-          eval_set=[(X.iloc[va_idx], y.iloc[va_idx])], verbose=False)
-    pred = np.clip(m.predict(X.iloc[va_idx]), 0, None).astype(np.float32)
-    m4_oof[va_idx] = pred
-    m4_test += np.clip(m.predict(X_test), 0, None).astype(np.float32) / 5
-    print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+ckpt_path = 'output/ckpt_xgb.pkl'
+if os.path.exists(ckpt_path):
+    with open(ckpt_path, 'rb') as f:
+        ckpt = pickle.load(f)
+    m4_oof, m4_test, cv_maes['xgb_raw_mae'] = ckpt['oof'], ckpt['test'], ckpt['cv_mae']
+    print(f"  ⏭️ xgb 캐시 사용 (CV MAE: {cv_maes['xgb_raw_mae']:.4f})", flush=True)
+else:
+    m4_oof = np.zeros(len(X), dtype=np.float32)
+    m4_test = np.zeros(len(X_test), dtype=np.float32)
+    for fold_i, (tr_idx, va_idx) in enumerate(folds):
+        m = xgb.XGBRegressor(
+            n_estimators=2000, learning_rate=0.03, max_depth=8,
+            min_child_weight=6, subsample=0.9, colsample_bytree=0.85,
+            reg_lambda=1.5, reg_alpha=0.05,
+            objective='reg:absoluteerror', eval_metric='mae',
+            tree_method='hist', random_state=42, verbosity=0, early_stopping_rounds=100)
+        m.fit(X.iloc[tr_idx], y.iloc[tr_idx], sample_weight=sample_w[tr_idx],
+              eval_set=[(X.iloc[va_idx], y.iloc[va_idx])], verbose=False)
+        pred = np.clip(m.predict(X.iloc[va_idx]), 0, None).astype(np.float32)
+        m4_oof[va_idx] = pred
+        m4_test += np.clip(m.predict(X_test), 0, None).astype(np.float32) / 5
+        print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+    cv_maes['xgb_raw_mae'] = mean_absolute_error(y, m4_oof)
+    with open(ckpt_path, 'wb') as f:
+        pickle.dump({'oof': m4_oof, 'test': m4_test, 'cv_mae': cv_maes['xgb_raw_mae']}, f)
+    print(f"  ✅ xgb 저장 완료 (CV MAE: {cv_maes['xgb_raw_mae']:.4f})", flush=True)
 oof_preds['xgb_raw_mae'] = m4_oof
 test_preds['xgb_raw_mae'] = m4_test
-cv_maes['xgb_raw_mae'] = mean_absolute_error(y, m4_oof)
 print(f"  모델 4 CV MAE: {cv_maes['xgb_raw_mae']:.4f}", flush=True)
 
 # 모델 5: CatBoost log1p+MAE
 print("\n  [모델 5] Cat log1p+MAE...", flush=True)
-m5_oof = np.zeros(len(X), dtype=np.float32)
-m5_test = np.zeros(len(X_test), dtype=np.float32)
-for fold_i, (tr_idx, va_idx) in enumerate(folds):
-    train_pool = Pool(X.iloc[tr_idx], y_log.iloc[tr_idx], weight=sample_w[tr_idx])
-    eval_pool = Pool(X.iloc[va_idx], y_log.iloc[va_idx])
-    m = CatBoostRegressor(
-        iterations=2000, learning_rate=0.03, depth=8,
-        l2_leaf_reg=5.0, subsample=0.9,
-        loss_function='MAE', random_seed=42, verbose=0)
-    m.fit(train_pool, eval_set=eval_pool, early_stopping_rounds=100)
-    pred = np.clip(np.expm1(m.predict(X.iloc[va_idx])), 0, None).astype(np.float32)
-    m5_oof[va_idx] = pred
-    m5_test += np.clip(np.expm1(m.predict(X_test)), 0, None).astype(np.float32) / 5
-    print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+ckpt_path = 'output/ckpt_cat_log1p.pkl'
+if os.path.exists(ckpt_path):
+    with open(ckpt_path, 'rb') as f:
+        ckpt = pickle.load(f)
+    m5_oof, m5_test, cv_maes['cat_log1p_mae'] = ckpt['oof'], ckpt['test'], ckpt['cv_mae']
+    print(f"  ⏭️ cat_log1p 캐시 사용 (CV MAE: {cv_maes['cat_log1p_mae']:.4f})", flush=True)
+else:
+    m5_oof = np.zeros(len(X), dtype=np.float32)
+    m5_test = np.zeros(len(X_test), dtype=np.float32)
+    for fold_i, (tr_idx, va_idx) in enumerate(folds):
+        train_pool = Pool(X.iloc[tr_idx], y_log.iloc[tr_idx], weight=sample_w[tr_idx])
+        eval_pool = Pool(X.iloc[va_idx], y_log.iloc[va_idx])
+        m = CatBoostRegressor(
+            iterations=2000, learning_rate=0.03, depth=8,
+            l2_leaf_reg=5.0, subsample=0.9,
+            loss_function='MAE', random_seed=42, verbose=0)
+        m.fit(train_pool, eval_set=eval_pool, early_stopping_rounds=100)
+        pred = np.clip(np.expm1(m.predict(X.iloc[va_idx])), 0, None).astype(np.float32)
+        m5_oof[va_idx] = pred
+        m5_test += np.clip(np.expm1(m.predict(X_test)), 0, None).astype(np.float32) / 5
+        print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+    cv_maes['cat_log1p_mae'] = mean_absolute_error(y, m5_oof)
+    with open(ckpt_path, 'wb') as f:
+        pickle.dump({'oof': m5_oof, 'test': m5_test, 'cv_mae': cv_maes['cat_log1p_mae']}, f)
+    print(f"  ✅ cat_log1p 저장 완료 (CV MAE: {cv_maes['cat_log1p_mae']:.4f})", flush=True)
 oof_preds['cat_log1p_mae'] = m5_oof
 test_preds['cat_log1p_mae'] = m5_test
-cv_maes['cat_log1p_mae'] = mean_absolute_error(y, m5_oof)
 print(f"  모델 5 CV MAE: {cv_maes['cat_log1p_mae']:.4f}", flush=True)
 
 # 모델 6: CatBoost raw+MAE
 print("\n  [모델 6] Cat raw+MAE...", flush=True)
-m6_oof = np.zeros(len(X), dtype=np.float32)
-m6_test = np.zeros(len(X_test), dtype=np.float32)
-for fold_i, (tr_idx, va_idx) in enumerate(folds):
-    train_pool = Pool(X.iloc[tr_idx], y.iloc[tr_idx], weight=sample_w[tr_idx])
-    eval_pool = Pool(X.iloc[va_idx], y.iloc[va_idx])
-    m = CatBoostRegressor(
-        iterations=2000, learning_rate=0.03, depth=6,
-        l2_leaf_reg=3.0, subsample=0.85,
-        loss_function='MAE', random_seed=42, verbose=0)
-    m.fit(train_pool, eval_set=eval_pool, early_stopping_rounds=100)
-    pred = np.clip(m.predict(X.iloc[va_idx]), 0, None).astype(np.float32)
-    m6_oof[va_idx] = pred
-    m6_test += np.clip(m.predict(X_test), 0, None).astype(np.float32) / 5
-    print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+ckpt_path = 'output/ckpt_cat_raw.pkl'
+if os.path.exists(ckpt_path):
+    with open(ckpt_path, 'rb') as f:
+        ckpt = pickle.load(f)
+    m6_oof, m6_test, cv_maes['cat_raw_mae'] = ckpt['oof'], ckpt['test'], ckpt['cv_mae']
+    print(f"  ⏭️ cat_raw 캐시 사용 (CV MAE: {cv_maes['cat_raw_mae']:.4f})", flush=True)
+else:
+    m6_oof = np.zeros(len(X), dtype=np.float32)
+    m6_test = np.zeros(len(X_test), dtype=np.float32)
+    for fold_i, (tr_idx, va_idx) in enumerate(folds):
+        train_pool = Pool(X.iloc[tr_idx], y.iloc[tr_idx], weight=sample_w[tr_idx])
+        eval_pool = Pool(X.iloc[va_idx], y.iloc[va_idx])
+        m = CatBoostRegressor(
+            iterations=2000, learning_rate=0.03, depth=6,
+            l2_leaf_reg=3.0, subsample=0.85,
+            loss_function='MAE', random_seed=42, verbose=0)
+        m.fit(train_pool, eval_set=eval_pool, early_stopping_rounds=100)
+        pred = np.clip(m.predict(X.iloc[va_idx]), 0, None).astype(np.float32)
+        m6_oof[va_idx] = pred
+        m6_test += np.clip(m.predict(X_test), 0, None).astype(np.float32) / 5
+        print(f"    Fold {fold_i+1} MAE: {mean_absolute_error(y.iloc[va_idx], pred):.4f}", flush=True)
+    cv_maes['cat_raw_mae'] = mean_absolute_error(y, m6_oof)
+    with open(ckpt_path, 'wb') as f:
+        pickle.dump({'oof': m6_oof, 'test': m6_test, 'cv_mae': cv_maes['cat_raw_mae']}, f)
+    print(f"  ✅ cat_raw 저장 완료 (CV MAE: {cv_maes['cat_raw_mae']:.4f})", flush=True)
 oof_preds['cat_raw_mae'] = m6_oof
 test_preds['cat_raw_mae'] = m6_test
-cv_maes['cat_raw_mae'] = mean_absolute_error(y, m6_oof)
 print(f"  모델 6 CV MAE: {cv_maes['cat_raw_mae']:.4f}", flush=True)
 
 # ============================================================
@@ -478,37 +541,47 @@ def build_mlp(input_dim):
                   loss='mae', metrics=['mae'])
     return model
 
-mlp_oof = np.zeros(len(X), dtype=np.float32)
-mlp_test = np.zeros(len(X_test), dtype=np.float32)
+ckpt_path = 'output/ckpt_mlp.pkl'
+if os.path.exists(ckpt_path):
+    with open(ckpt_path, 'rb') as f:
+        ckpt = pickle.load(f)
+    mlp_oof, mlp_test, mlp_cv = ckpt['oof'], ckpt['test'], ckpt['cv_mae']
+    print(f"  ⏭️ mlp 캐시 사용 (CV MAE: {mlp_cv:.4f})", flush=True)
+else:
+    mlp_oof = np.zeros(len(X), dtype=np.float32)
+    mlp_test = np.zeros(len(X_test), dtype=np.float32)
 
-for fold_i, (tr_idx, va_idx) in enumerate(folds):
-    print(f"  MLP Fold {fold_i+1}/5...", flush=True)
-    tf.random.set_seed(42)
-    np.random.seed(42)
+    for fold_i, (tr_idx, va_idx) in enumerate(folds):
+        print(f"  MLP Fold {fold_i+1}/5...", flush=True)
+        tf.random.set_seed(42)
+        np.random.seed(42)
 
-    model = build_mlp(X_train_nn.shape[1])
-    es = keras_callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=0)
-    rlr = keras_callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-5, verbose=0)
+        model = build_mlp(X_train_nn.shape[1])
+        es = keras_callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=0)
+        rlr = keras_callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-5, verbose=0)
 
-    model.fit(
-        X_train_nn[tr_idx], y_log_nn[tr_idx],
-        validation_data=(X_train_nn[va_idx], y_log_nn[va_idx]),
-        epochs=100, batch_size=512, callbacks=[es, rlr], verbose=0
-    )
+        model.fit(
+            X_train_nn[tr_idx], y_log_nn[tr_idx],
+            validation_data=(X_train_nn[va_idx], y_log_nn[va_idx]),
+            epochs=100, batch_size=512, callbacks=[es, rlr], verbose=0
+        )
 
-    pred_log = model.predict(X_train_nn[va_idx], verbose=0).flatten()
-    pred = np.clip(np.expm1(pred_log), 0, None).astype(np.float32)
-    mlp_oof[va_idx] = pred
-    mlp_test += np.clip(np.expm1(model.predict(X_test_nn, verbose=0).flatten()), 0, None).astype(np.float32) / 5
+        pred_log = model.predict(X_train_nn[va_idx], verbose=0).flatten()
+        pred = np.clip(np.expm1(pred_log), 0, None).astype(np.float32)
+        mlp_oof[va_idx] = pred
+        mlp_test += np.clip(np.expm1(model.predict(X_test_nn, verbose=0).flatten()), 0, None).astype(np.float32) / 5
 
-    mae = mean_absolute_error(y.values[va_idx], pred)
-    print(f"    Fold {fold_i+1} MAE: {mae:.4f}", flush=True)
+        mae = mean_absolute_error(y.values[va_idx], pred)
+        print(f"    Fold {fold_i+1} MAE: {mae:.4f}", flush=True)
 
-    del model
-    tf.keras.backend.clear_session()
-    gc.collect()
+        del model
+        tf.keras.backend.clear_session()
+        gc.collect()
 
-mlp_cv = mean_absolute_error(y, mlp_oof)
+    mlp_cv = mean_absolute_error(y, mlp_oof)
+    with open(ckpt_path, 'wb') as f:
+        pickle.dump({'oof': mlp_oof, 'test': mlp_test, 'cv_mae': mlp_cv}, f)
+    print(f"  ✅ mlp 저장 완료 (CV MAE: {mlp_cv:.4f})", flush=True)
 oof_preds['keras_mlp'] = mlp_oof
 test_preds['keras_mlp'] = mlp_test
 cv_maes['keras_mlp'] = mlp_cv
@@ -524,44 +597,54 @@ print("=" * 60, flush=True)
 from pytorch_tabnet.tab_model import TabNetRegressor
 import torch
 
-tabnet_oof = np.zeros(len(X), dtype=np.float32)
-tabnet_test = np.zeros(len(X_test), dtype=np.float32)
+ckpt_path = 'output/ckpt_tabnet.pkl'
+if os.path.exists(ckpt_path):
+    with open(ckpt_path, 'rb') as f:
+        ckpt = pickle.load(f)
+    tabnet_oof, tabnet_test, tabnet_cv = ckpt['oof'], ckpt['test'], ckpt['cv_mae']
+    print(f"  ⏭️ tabnet 캐시 사용 (CV MAE: {tabnet_cv:.4f})", flush=True)
+else:
+    tabnet_oof = np.zeros(len(X), dtype=np.float32)
+    tabnet_test = np.zeros(len(X_test), dtype=np.float32)
 
-for fold_i, (tr_idx, va_idx) in enumerate(folds):
-    print(f"  TabNet Fold {fold_i+1}/5...", flush=True)
-    torch.manual_seed(42)
-    np.random.seed(42)
+    for fold_i, (tr_idx, va_idx) in enumerate(folds):
+        print(f"  TabNet Fold {fold_i+1}/5...", flush=True)
+        torch.manual_seed(42)
+        np.random.seed(42)
 
-    model = TabNetRegressor(
-        n_d=32, n_a=32, n_steps=5, gamma=1.5,
-        n_independent=2, n_shared=2, lambda_sparse=1e-4,
-        optimizer_fn=torch.optim.Adam,
-        optimizer_params=dict(lr=2e-2),
-        scheduler_params={"step_size": 10, "gamma": 0.9},
-        scheduler_fn=torch.optim.lr_scheduler.StepLR,
-        mask_type='entmax', seed=42, verbose=10,
-    )
+        model = TabNetRegressor(
+            n_d=32, n_a=32, n_steps=5, gamma=1.5,
+            n_independent=2, n_shared=2, lambda_sparse=1e-4,
+            optimizer_fn=torch.optim.Adam,
+            optimizer_params=dict(lr=2e-2),
+            scheduler_params={"step_size": 10, "gamma": 0.9},
+            scheduler_fn=torch.optim.lr_scheduler.StepLR,
+            mask_type='entmax', seed=42, verbose=10,
+        )
 
-    model.fit(
-        X_train_nn[tr_idx], y_log_nn[tr_idx].reshape(-1, 1),
-        eval_set=[(X_train_nn[va_idx], y_log_nn[va_idx].reshape(-1, 1))],
-        eval_metric=['mae'],
-        max_epochs=100, patience=15,
-        batch_size=2048, virtual_batch_size=256,
-    )
+        model.fit(
+            X_train_nn[tr_idx], y_log_nn[tr_idx].reshape(-1, 1),
+            eval_set=[(X_train_nn[va_idx], y_log_nn[va_idx].reshape(-1, 1))],
+            eval_metric=['mae'],
+            max_epochs=100, patience=15,
+            batch_size=2048, virtual_batch_size=256,
+        )
 
-    pred_log = model.predict(X_train_nn[va_idx]).flatten()
-    pred = np.clip(np.expm1(pred_log), 0, None).astype(np.float32)
-    tabnet_oof[va_idx] = pred
-    tabnet_test += np.clip(np.expm1(model.predict(X_test_nn).flatten()), 0, None).astype(np.float32) / 5
+        pred_log = model.predict(X_train_nn[va_idx]).flatten()
+        pred = np.clip(np.expm1(pred_log), 0, None).astype(np.float32)
+        tabnet_oof[va_idx] = pred
+        tabnet_test += np.clip(np.expm1(model.predict(X_test_nn).flatten()), 0, None).astype(np.float32) / 5
 
-    mae = mean_absolute_error(y.values[va_idx], pred)
-    print(f"    Fold {fold_i+1} MAE: {mae:.4f}", flush=True)
+        mae = mean_absolute_error(y.values[va_idx], pred)
+        print(f"    Fold {fold_i+1} MAE: {mae:.4f}", flush=True)
 
-    del model
-    gc.collect()
+        del model
+        gc.collect()
 
-tabnet_cv = mean_absolute_error(y, tabnet_oof)
+    tabnet_cv = mean_absolute_error(y, tabnet_oof)
+    with open(ckpt_path, 'wb') as f:
+        pickle.dump({'oof': tabnet_oof, 'test': tabnet_test, 'cv_mae': tabnet_cv}, f)
+    print(f"  ✅ tabnet 저장 완료 (CV MAE: {tabnet_cv:.4f})", flush=True)
 oof_preds['tabnet'] = tabnet_oof
 test_preds['tabnet'] = tabnet_test
 cv_maes['tabnet'] = tabnet_cv
