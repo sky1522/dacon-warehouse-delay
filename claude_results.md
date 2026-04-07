@@ -244,3 +244,26 @@
 ### 생성된 파일
 - `output/submission_phase9.csv` — Phase 9 최종 예측
 - `output/feature_importance_phase9.png` — 피처 중요도 시각화
+
+## Phase 10: NN 추가 (Keras MLP + TabNet) + 8모델 스태킹 (run_phase10.py)
+
+### 핵심 전략
+- 트리 모델만 6개 → NN 2개(Keras MLP + TabNet) 추가로 다양성 극대화
+- 8모델 스태킹으로 CV-Public 갭 축소 노림
+
+### 8모델 구성
+- 트리 6개: LGB raw+MAE, LGB log1p+Huber, LGB sqrt+MAE, XGB raw+MAE, Cat log1p+MAE, Cat raw+MAE
+- NN 2개: Keras MLP (512-256-128-64, log1p), TabNet (n_d=32, n_a=32, entmax)
+
+### 결과 (실행 후 업데이트 필요)
+- 트리 6모델: 각 ?.????
+- Keras MLP: ?.????
+- TabNet: ?.????
+- Level 1 트리만: ?.????
+- Level 1 트리+NN: ?.????
+- Level 2 LGB 스태킹: ?.????
+- Phase 8 대비 개선: ?.????
+
+### 생성된 파일
+- `output/submission_phase10.csv` — Phase 10 최종 예측
+- `output/feature_importance_phase10.png` — 피처 중요도 시각화
