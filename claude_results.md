@@ -267,3 +267,35 @@
 ### 생성된 파일
 - `output/submission_phase10.csv` — Phase 10 최종 예측
 - `output/feature_importance_phase10.png` — 피처 중요도 시각화
+
+---
+
+## Phase 11: Adversarial Sample Weight + Transformer 시계열 모델
+
+### 핵심 전략
+- **Adversarial Validation**: train/test 분포 차이를 LightGBM 이진분류기로 학습, test와 닮은 train 샘플에 가중치 부여 (CV-Public 갭 1.46 축소 목적)
+- **Transformer 시계열 모델 추가**: 원시 25 timeslot 시퀀스를 Transformer Encoder로 직접 학습 (9번째 모델)
+- 기존 트리 6 + MLP + TabNet에 adversarial combined_weight 적용
+
+### 9모델 구성
+- 트리 6개: LGB raw+MAE, LGB log1p+Huber, LGB sqrt+MAE, XGB raw+MAE, Cat log1p+MAE, Cat raw+MAE (combined_weight 적용)
+- NN 3개: Keras MLP (combined_weight), TabNet (weight 미지원), Transformer (combined_weight, 시퀀스 입력)
+
+### Transformer 모델 상세
+- 입력: scenario별 0~timeslot까지의 원본 90개 피처 시퀀스 (zero-padding)
+- d_model=128, nhead=8, num_layers=3, AdamW+CosineAnnealing
+- GroupKFold 5-Fold, early stopping (patience=8)
+
+### 결과 (실행 후 업데이트 필요)
+- Adversarial AUC: ?.????
+- 트리 6모델 (adv weight): 각 ?.????
+- Keras MLP: ?.????
+- TabNet: ?.????
+- Transformer (NEW): ?.????
+- Level 1 가중 평균 (9모델): ?.????
+- Level 2 LGB 스태킹 (9모델): ?.????
+- Phase 10 대비 개선: ?.????
+
+### 생성된 파일
+- `output/submission_phase11.csv` — Phase 11 최종 예측
+- `output/feature_importance_phase11.png` — 피처 중요도 시각화
