@@ -365,3 +365,36 @@
 ### 생성된 파일
 - `output/submission_phase13s1.csv` — Phase 13 Step 1 최종 예측
 - `output/feature_importance_phase13s1.png` — 피처 중요도 시각화 (q_/EDA 피처 하이라이트)
+
+## Phase 13 Step 3: Tail-aware Modeling (run_phase13_step3.py)
+
+### 핵심 전략
+1. **Tail-aware Sample Weight**: base_weight × tail_weight (target 크기에 비례)
+   - tail_weight = 1 + (y / q95).clip(0, 3) → target=0: 1.0, target=q95: 2.0, target=3×q95: 4.0
+2. **신규 모델 3개 추가** (총 9 트리 + 2 NN = 11):
+   - LGB Quantile 0.9: 고 target 특화 (alpha=0.9)
+   - LGB Quantile 0.75: 중상위 target 특화 (alpha=0.75)
+   - XGB log1p+Huber: log tail 압축 (pseudohubererror, GPU)
+3. **피처 346개 동일** (Phase 13s1과 동일)
+4. **CV 동일**: StratifiedGroupKFold(layout_id, target_bin=5)
+
+### 모델 구성 (11개)
+- 트리 9: LGB raw+MAE, LGB log1p+Huber, LGB sqrt+MAE, XGB raw+MAE, Cat log1p+MAE, Cat raw+MAE, **LGB Q90**, **LGB Q75**, **XGB log1p+Huber**
+- NN 2: Keras MLP (tail weight 적용), TabNet (기존 방식)
+- Level 1: Nelder-Mead 가중평균 (트리 9 / 트리+NN 11)
+- Level 2: LGB 스태킹 (11 OOF + 6 원본 = 17 meta features)
+
+### 결과 (실행 후 업데이트 필요)
+- 트리 9모델: 각 ?.????
+- Keras MLP: ?.????
+- TabNet: ?.????
+- Level 1 트리만 (9): ?.????
+- Level 1 트리+NN (11): ?.????
+- Level 2 LGB 스태킹: ?.????
+- 최종 선택: ?.????
+- Phase 13s1 CV: 8.5668 → Phase 13s3 CV: ?.????
+- Hard layout bin 9 residual: baseline +95.33 → ?.??
+
+### 생성된 파일
+- `output/submission_phase13s3.csv` — Phase 13 Step 3 최종 예측
+- `output/feature_importance_phase13s3.png` — 피처 중요도 시각화
