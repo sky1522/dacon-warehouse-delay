@@ -299,3 +299,34 @@
 ### 생성된 파일
 - `output/submission_phase11.csv` — Phase 11 최종 예측
 - `output/feature_importance_phase11.png` — 피처 중요도 시각화
+
+## Phase 12a: Queueing Theory 기반 피처 추가 (run_phase12a.py)
+
+### 핵심 전략
+- Phase 10 구조 완전 동일 + Queueing Theory 피처 42개 추가
+- 논문 3편 기반: Little's Law, Pollaczek-Khinchin 공식, 병목 탐지
+- Adversarial weight / Transformer 사용하지 않음 (Phase 11 실패 확인)
+- 8모델 (트리 6 + Keras MLP + TabNet) + Level 2 LGB 스태킹
+
+### 신규 Queueing Theory 피처 42개
+- A) Utilization / Traffic Intensity (16): rho 4종 + sq/inv/P-K 각 4
+- B) Little's Law 기반 대기시간 (6): arrival rate, expected wait, service gap, throughput
+- C) Bottleneck Detection (8): max/min/mean/std/gap + cascade 3종
+- D) Queue Stability Indicators (4): unstable flags + count
+- E) Demand Surge / Time-varying (8): rho change/accel/roll3, queue growth, inflow change/accel, cum unstable
+
+### 결과 (실행 후 업데이트 필요)
+- 총 피처 수: ~361개 (319 + 42)
+- 트리 6모델: 각 ?.????
+- Keras MLP: ?.????
+- TabNet: ?.????
+- Level 1 트리만: ?.????
+- Level 1 트리+NN: ?.????
+- Level 2 LGB 스태킹: ?.????
+- 최종 선택: ?.????
+- Phase 10 대비 개선: ?.????
+- Queueing theory 피처 Top 30 진입: ?개
+
+### 생성된 파일
+- `output/submission_phase12a.csv` — Phase 12a 최종 예측
+- `output/feature_importance_phase12a.png` — 피처 중요도 시각화 (q_ 피처 하이라이트)
