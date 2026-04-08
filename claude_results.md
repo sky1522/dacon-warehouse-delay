@@ -330,3 +330,38 @@
 ### 생성된 파일
 - `output/submission_phase12a.csv` — Phase 12a 최종 예측
 - `output/feature_importance_phase12a.png` — 피처 중요도 시각화 (q_ 피처 하이라이트)
+
+## Phase 13 Step 1: CV 전략 재설계 + EDA 기반 피처 재구성 (run_phase13_step1.py)
+
+### 핵심 전략
+1. **CV 변경**: GroupKFold(scenario_id) → StratifiedGroupKFold(layout_id, target_bin=5)
+   - layout_id 기준 분할로 "본 적 없는 layout" 검증 → Public 상황 재현
+   - target 5분위 binning으로 각 fold target 분포 균형화
+2. **EDA 기반 신규 피처 7개**:
+   - Shift hour regime (3): is_night_shift, hours_after_peak, shift_phase
+   - Time step (2): time_step_in_scenario, ts_squared
+   - Overload vs Congestion (2): inflow_per_active_robot, is_overload_not_congestion
+3. **저상관 layout 정적 피처 제거**: 10개 원본 + 12개 파생 = 22개 제거
+4. **Queueing Theory 피처 42개 유지** (Phase 12a 동일)
+
+### 모델 구성 (Phase 12a 동일)
+- 트리 6: LGB raw+MAE, LGB log1p+Huber, LGB sqrt+MAE, XGB raw+MAE, Cat log1p+MAE, Cat raw+MAE
+- NN 2: Keras MLP (512-256-128-64), TabNet (n_d=32)
+- Level 1: Nelder-Mead 가중평균
+- Level 2: LGB 스태킹 (8 OOF + 6 원본 = 14 meta features)
+
+### 결과 (실행 후 업데이트 필요)
+- 총 피처 수: ~346개 (361 + 7 - 22)
+- 트리 6모델: 각 ?.????
+- Keras MLP: ?.????
+- TabNet: ?.????
+- Level 1 트리만: ?.????
+- Level 1 트리+NN: ?.????
+- Level 2 LGB 스태킹: ?.????
+- 최종 선택: ?.????
+- Phase 12a CV (old): 8.575 → Phase 13s1 CV (new): ?.????
+- 목표: CV-Public 갭 0.2 이내
+
+### 생성된 파일
+- `output/submission_phase13s1.csv` — Phase 13 Step 1 최종 예측
+- `output/feature_importance_phase13s1.png` — 피처 중요도 시각화 (q_/EDA 피처 하이라이트)
