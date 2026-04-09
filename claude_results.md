@@ -547,3 +547,34 @@
 ### 생성된 파일
 - `output/submission_phase15_full.csv` — 8-model ensemble
 - `output/submission_phase15b_blend.csv` — P15 full + P13s1 blend
+
+## Phase 16 EDA: Scenario Time Order Verification (run_phase16_eda.py)
+
+### 목적
+Phase 16 lag/diff/rolling features 추가 전, scenario 내 row 순서가 실제 시간 순서인지 검증.
+
+### 검증 항목
+1. Row order: ID 단조증가 여부
+2. shift_hour: scenario 내 단조증가/상수 비율
+3. Lag-1 autocorrelation (10개 피처, scenario 내)
+4. Lag feature vs target correlation (lag 1/2/3)
+5. Diff feature vs target correlation
+6. Rolling mean vs target correlation
+
+### 판단 기준
+- Overall autocorr > 0.3 + monotonic > 50%: STRONG → lag 추천
+- Autocorr 0.1~0.3: WEAK → diff/rolling만
+- Autocorr < 0.1: NONE → lag 포기, interaction 방향
+
+### 결과 (실행 후 업데이트 필요)
+- shift_hour monotonic ratio: ?.?%
+- Overall autocorr: ?.???
+- Max lag corr: ?.????
+- Decision: STRONG / WEAK / NONE
+
+### 생성된 파일
+- `output/phase16_eda/shift_hour_in_scenario.png`
+- `output/phase16_eda/phase16_analysis.png`
+- `output/phase16_eda/autocorr_results.txt`
+- `output/phase16_eda/lag_corr.csv`
+- `output/phase16_eda/summary.md`
