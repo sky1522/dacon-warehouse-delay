@@ -645,3 +645,35 @@ Phase 16 lag/diff/rolling features 추가 전, scenario 내 row 순서가 실제
 - `output/phase16_residual/residual_by_feature_value.png` — 피처별 MAE
 - `output/phase16_residual/worst_predictions.csv`
 - `output/phase16_residual/phase17_direction.md` — Phase 17 방향 요약
+
+## Phase 17: Bin 9 Attack - Explosion + Layout Calibration + Position + CV² (run_phase17_fe.py)
+
+### 배경
+- Phase 16 Residual 분석 결과: Bin 9 MAE 40.92 (전체 MAE의 48%), Hard layout top5 MAE 30.80
+- Position 후반부 MAE 2배 (5.85 -> 10.11), Top 20 worst 100% 과소예측
+- 핵심 패턴: pack_utilization=1.0 + order_inflow 상승 + congestion=0 (queueing explosion)
+
+### 신규 피처 5개 카테고리 (~40개, selection top 30)
+1. **A) Bottleneck Explosion (12)**: M/M/1 explosion term rho/(1-rho), rho_max, log_explosion, n_saturated, bottleneck_idx, explosion_sum
+2. **B) Demand-Supply Gap (7)**: demand_total (urgency/complexity weighted), supply_effective, ds_gap, ds_ratio, scenario-level peak
+3. **C) Position Features (4)**: position_in_scenario, position_norm, pos_x_explosion_max, pos_x_ds_gap
+4. **D) Layout Residual Calibration (1)**: Phase 16 OOF residual의 layout별 평균을 OOF 방식으로 매핑 (layout_residual_bias)
+5. **E) CV² Features (12)**: 6개 핵심 피처의 scenario 내 CV + CV² (M/G/1 waiting time formula)
+
+### 모델 (Phase 16 동일 + Phase 17 피처)
+- 8 models: LGB×3 + XGB + Cat×2 + MLP + TabNet (TabNet 실패 시 7모델 fallback)
+- CV: StratifiedGroupKFold(layout_id, target_bin=5)
+- Sample weight: base (q90/q95/q99 + time)
+- Checkpoint: ckpt_phase17_{name}.pkl
+
+### 결과 (실행 후 업데이트 필요)
+- Phase 16 base features: ~696, New Phase 17 selected: ~30, Total: ~726
+- 모델별 CV MAE: 각 ?.????
+- Ensemble CV: ?.???? (Phase 16 baseline: 8.4403)
+- Bin 9 MAE: ?.?? (Phase 16 baseline: 40.92)
+- Hard top 5 layouts MAE: ?.?? (Phase 16 baseline: 30.80)
+
+### 생성된 파일
+- `output/submission_phase17.csv`
+- `output/feature_importance_phase17.png`
+- `output/phase17_feature_importance.csv`
