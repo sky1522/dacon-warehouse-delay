@@ -524,3 +524,26 @@
 - `output/submission_phase15.csv`
 - `output/feature_importance_phase15.png`
 - `output/phase15_feature_importance.csv` — 신규 피처 중요도 ranking
+
+## Phase 15B: TabNet Retrained + 8-model Ensemble (run_phase15b_tabnet.py)
+
+### 핵심
+- Phase 15 피처(546개) 그대로 재현 + TabNet만 학습
+- 기존 7개 모델 체크포인트 재사용 + TabNet → 8-model 앙상블
+- Phase 13s1과 재블렌딩
+
+### TabNet 설정 (변경)
+- n_steps=3 (기존 5→3), gamma=1.3, lambda_sparse=1e-3
+- max_epochs=50, patience=15
+- RobustScaler + clip(-5, 5)
+- raw target (log1p 아님)
+
+### 결과 (실행 후 업데이트 필요)
+- TabNet CV MAE: ?.????
+- Phase 15 Full (8m) CV: ?.???? (baseline 7m: 8.4553)
+- Blend CV: ?.????
+- Previous best Public: 9.8891 (P15 7m + P13s1)
+
+### 생성된 파일
+- `output/submission_phase15_full.csv` — 8-model ensemble
+- `output/submission_phase15b_blend.csv` — P15 full + P13s1 blend
