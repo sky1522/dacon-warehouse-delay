@@ -578,3 +578,32 @@ Phase 16 lag/diff/rolling features 추가 전, scenario 내 row 순서가 실제
 - `output/phase16_eda/autocorr_results.txt`
 - `output/phase16_eda/lag_corr.csv`
 - `output/phase16_eda/summary.md`
+
+## Phase 16: 2nd-order Feature Engineering (run_phase16_fe.py)
+
+### 핵심 전략
+- Phase 15 base (~546) + 2nd-order features (lag/rolling/cum/interaction/lag-agg) → selection top 150 → ~700 features
+- EDA 결과: lag-1 autocorr 0.44, lag features가 current보다 target과 더 강한 상관
+- Diff features 제외 (EDA에서 무의미 확인)
+
+### 2nd-order Features
+- A) Lag (1,2,3): 14 cols × 3 = 42
+- B) Rolling (win 3,5, mean+std): 10 cols × 4 = 40
+- C) Cumulative (max/min/mean/gap): 7 cols × 4 = 28
+- D) Interaction: 15개 (pack×inflow, queue×battery, congestion×density 등)
+- E) Lag-based scenario agg: 7 cols × 3 = 21
+- Total new: ~146 → selection top 150
+
+### 모델 (Phase 15 동일)
+- 8 models: LGB×3 + XGB + Cat×2 + MLP + TabNet
+- CV: StratifiedGroupKFold(layout_id)
+- Sample weight: base only
+
+### 결과 (실행 후 업데이트 필요)
+- Phase 15 base: ~546, New 2nd-order selected: ~150, Total: ~700
+- Ensemble CV: ?.???? (Phase 15 baseline: 8.4553)
+
+### 생성된 파일
+- `output/submission_phase16.csv`
+- `output/feature_importance_phase16.png`
+- `output/phase16_feature_importance.csv`
