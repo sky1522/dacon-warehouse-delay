@@ -398,3 +398,34 @@
 ### 생성된 파일
 - `output/submission_phase13s3.csv` — Phase 13 Step 3 최종 예측
 - `output/feature_importance_phase13s3.png` — 피처 중요도 시각화
+
+## Phase 13 Step 4: Bin 9 Extreme Target EDA (run_phase13s4_bin9_eda.py)
+
+### 핵심 질문
+- bin 9 (target > 100) 샘플의 공통점은 무엇인가?
+- 어떤 피처로 bin 9를 구분할 수 있는가? (KS test)
+- bin 9 발생을 예측할 수 있는가? (Classifier AUC)
+- Test에 bin 9 후보가 얼마나 있는가?
+
+### 분석 내용
+1. bin 9 정의 + 기본 통계 (threshold=100, ~5% of train)
+2. KS test: bin 9 vs non-bin9 전체 피처 비교
+3. KMeans 클러스터링: bin 9 내부 sub-pattern
+4. 조건 탐색: top 5 피처 quantile별 / 2-feature 조합별 bin 9 비율
+5. Layout/Scenario/Time 분포
+6. 분류기: LogReg + LGBM AUC (GroupKFold on layout_id)
+7. Test set bin 9 확률 분포
+8. 시각화: KS features, ROC curve, time progression
+
+### 결과 (실행 후 업데이트 필요)
+- Strong separators (KS > 0.5): ?개
+- LogReg AUC: ?.????
+- LGBM AUC: ?.????
+- 결론: Scenario A/B/C 중 어디?
+
+### 생성된 파일
+- `output/phase13s4_bin9/bin9_ks_ranking.csv`
+- `output/phase13s4_bin9/bin9_by_layout.csv`
+- `output/phase13s4_bin9/bin9_analysis.png`
+- `output/phase13s4_bin9/bin9_roc.png`
+- `output/phase13s4_bin9/summary.md`
