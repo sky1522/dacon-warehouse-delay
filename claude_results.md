@@ -493,3 +493,34 @@
 - `output/submission_phase14_gru.csv` — GRU 단독
 - `output/phase14_gru_oof.csv` — OOF predictions (블렌딩용)
 - `output/submission_phase14_blend_*.csv` — Phase 13s1과 블렌딩
+
+## Phase 15: Large-scale Feature Engineering (run_phase15_fe.py)
+
+### 핵심 전략
+- NVIDIA Grandmaster / Kaggle 1위 방식: 대규모 aggregation 피처 탐색 후 selection
+- Phase 13s1 base 346개 + 신규 ~200개 selected = ~546개
+- 2-Step: (1) 1000+ 피처 생성 → (2) LGB importance 기반 top 200 선택
+
+### 신규 Aggregation 피처
+- A) Scenario-level (26 cols × 6 funcs + first/last/trend/dist/rank): ~300개
+- B) Layout-level (11 cols × 5 funcs): ~55개
+- C) Shift_hour-level (6 cols × 3 funcs): ~18개
+- D) Layout × shift_hour cross (5 cols × 2 funcs): ~10개
+- E) Pair ratios: 6개
+
+### 모델 (Phase 13s1 동일)
+- 트리 6 + MLP + TabNet + Level 1/2 stacking
+- Sample weight: base only
+- CV: StratifiedGroupKFold(layout_id)
+
+### 결과 (실행 후 업데이트 필요)
+- 총 생성 피처: ~1000+
+- Selected 피처: top 200
+- 최종 피처: ~546
+- Phase 13s1 CV: 8.5668 → Phase 15 CV: ?.????
+- Hard layout MAE: baseline 18.784 → ?.????
+
+### 생성된 파일
+- `output/submission_phase15.csv`
+- `output/feature_importance_phase15.png`
+- `output/phase15_feature_importance.csv` — 신규 피처 중요도 ranking
