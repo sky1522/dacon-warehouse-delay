@@ -301,6 +301,15 @@ for feat in ['is_night_shift', 'hours_after_peak', 'shift_phase', 'time_step_in_
 for c in ['layout_compactness', 'zone_dispersion', 'one_way_ratio', 'aisle_width_avg', 'floor_area_sqm', 'ceiling_height_m', 'building_age_years', 'intersection_count', 'fire_sprinkler_count', 'emergency_exit_count', 'robot_per_area', 'congestion_per_width', 'zone_density_per_width', 'order_per_sqm', 'warehouse_volume', 'intersection_density', 'pack_station_density', 'charger_density', 'robot_density_layout', 'movement_friction', 'layout_compact_x_dispersion', 'one_way_friction']:
     if c in combined.columns: combined.drop(columns=[c], inplace=True)
 
+layout_cols_surviving = [c for c in combined.columns if c in [
+    'robot_total', 'pack_station_count', 'charger_count',
+    'floor_area_sqm', 'ceiling_height_m', 'building_age_years',
+    'aisle_width_avg', 'intersection_count', 'one_way_ratio',
+    'layout_compactness', 'zone_dispersion', 'sku_concentration',
+    'emergency_exit_count', 'fire_sprinkler_count',
+]]
+print(f"\nSurviving layout columns: {layout_cols_surviving}", flush=True)
+
 drop_cols_meta = ['ID', 'layout_id', 'scenario_id', 'layout_type', 'avg_delay_minutes_next_30m', '_is_train', '_original_idx']
 base_feature_cols = [c for c in combined.columns if c not in drop_cols_meta and combined[c].dtype in [np.float32, np.float64, np.int32, np.int64, np.int8]]
 print(f"  Base features: {len(base_feature_cols)}", flush=True)
@@ -628,43 +637,71 @@ print(f"  Position features: 4", flush=True)
 # ---- Category D: Layout Hardness Indicators (domain knowledge, no target) ----
 print("\n=== D) Layout Hardness Indicators (domain knowledge) ===", flush=True)
 
-# Pack station ratio (core hard layout indicator)
-combined['l_pack_ratio'] = (
-    combined['pack_station_count'] / (combined['robot_total'] + 1)
-).astype('float32')
+# Check which layout columns survived Phase 13s1 drop
+available = set(combined.columns)
 
-# Pack severity (domain rule)
-combined['l_pack_severity'] = (
-    (combined['pack_station_count'] <= 5).astype(int) * 2 +
-    (combined['pack_station_count'] <= 4).astype(int) * 3 +
-    (combined['pack_station_count'] <= 3).astype(int) * 5
-).astype('int8')
+# l_pack_ratio: pack_station_count / robot_total
+if 'pack_station_count' in available and 'robot_total' in available:
+    combined['l_pack_ratio'] = (
+        combined['pack_station_count'] / (combined['robot_total'] + 1)
+    ).astype('float32')
 
-# Robot density
-combined['l_robot_density'] = (
-    combined['robot_total'] / (combined['floor_area_sqm'] / 1000 + 1)
-).astype('float32')
+# l_pack_severity: domain rule (pack_station_count only)
+if 'pack_station_count' in available:
+    combined['l_pack_severity'] = (
+        (combined['pack_station_count'] <= 5).astype(int) * 2 +
+        (combined['pack_station_count'] <= 4).astype(int) * 3 +
+        (combined['pack_station_count'] <= 3).astype(int) * 5
+    ).astype('int8')
 
-# Effective capacity (lower = harder)
-combined['l_effective_capacity'] = (
-    combined['pack_station_count'] * combined['charger_count'] / (combined['robot_total'] + 1)
-).astype('float32')
+# l_robot_density: robot_total / floor_area_sqm (may be dropped)
+if 'robot_total' in available and 'floor_area_sqm' in available:
+    combined['l_robot_density'] = (
+        combined['robot_total'] / (combined['floor_area_sqm'] / 1000 + 1)
+    ).astype('float32')
+elif 'robot_total' in available:
+    # Fallback: pack_station_count as proxy
+    combined['l_robot_density'] = (
+        combined['robot_total'] / (combined['pack_station_count'] + 1)
+    ).astype('float32')
 
-# Capacity vs demand (structural load of layout)
-combined['l_capacity_demand_ratio'] = (
-    combined['pack_station_count'] * combined['charger_count'] /
-    (combined.groupby('layout_id')['order_inflow_15m'].transform('mean') + 1)
-).astype('float32')
+# l_effective_capacity: pack x charger / robot
+if all(c in available for c in ['pack_station_count', 'charger_count', 'robot_total']):
+    combined['l_effective_capacity'] = (
+        combined['pack_station_count'] * combined['charger_count'] / (combined['robot_total'] + 1)
+    ).astype('float32')
 
-# Composite hardness score
-combined['l_hardness_score'] = (
-    -combined['l_pack_ratio'] * 10 +
-    combined['l_robot_density'] * 0.1 -
-    combined['l_effective_capacity'] * 5 +
-    combined['l_pack_severity'] * 2
-).astype('float32')
+# l_capacity_demand_ratio: pack x charger / scenario order_inflow mean
+if all(c in available for c in ['pack_station_count', 'charger_count']):
+    layout_inflow_mean = combined.groupby('layout_id')['order_inflow_15m'].transform('mean')
+    combined['l_capacity_demand_ratio'] = (
+        combined['pack_station_count'] * combined['charger_count'] / (layout_inflow_mean + 1)
+    ).astype('float32')
 
-print(f"  Layout hardness features: 6", flush=True)
+# l_hardness_score: composite (only if enough components exist)
+hardness_cols_for_score = [c for c in [
+    'l_pack_ratio', 'l_robot_density', 'l_effective_capacity', 'l_pack_severity'
+] if c in combined.columns]
+
+if len(hardness_cols_for_score) >= 2:
+    score = pd.Series(0.0, index=combined.index, dtype='float32')
+    if 'l_pack_ratio' in combined.columns:
+        score -= combined['l_pack_ratio'] * 10
+    if 'l_robot_density' in combined.columns:
+        score += combined['l_robot_density'] * 0.1
+    if 'l_effective_capacity' in combined.columns:
+        score -= combined['l_effective_capacity'] * 5
+    if 'l_pack_severity' in combined.columns:
+        score += combined['l_pack_severity'] * 2
+    combined['l_hardness_score'] = score.astype('float32')
+
+# Report actually created features
+hardness_feats_created = [c for c in combined.columns if c.startswith('l_') and c in [
+    'l_pack_ratio', 'l_pack_severity', 'l_robot_density',
+    'l_effective_capacity', 'l_capacity_demand_ratio', 'l_hardness_score'
+]]
+print(f"  Layout hardness features created: {len(hardness_feats_created)}", flush=True)
+print(f"  Features: {hardness_feats_created}", flush=True)
 
 # ---- Category E: Coefficient of Variation Squared (12) ----
 print("\n=== E) CV^2 Features (M/G/1 formula) ===", flush=True)
@@ -704,12 +741,13 @@ new_phase17_feats = [
         'n_saturated', 'n_near_saturated',
         'demand_total', 'supply_effective', 'ds_gap', 'ds_ratio', 's_ds_',
         'position_in_scenario', 'position_norm', 'pos_x_',
-        'l_pack_ratio', 'l_pack_severity', 'l_robot_density',
-        'l_effective_capacity', 'l_capacity_demand_ratio', 'l_hardness_score',
-        'cv_', 'cv_sq_'
+        'l_',  # all l_* layout hardness features
+        'cv_'
     ))
-    and c not in ['rho_pack_calc', 'rho_robot_calc', 'rho_charge_calc', 'rho_truck_calc']
+    and c not in phase16_feature_cols  # exclude Phase 16 base overlaps
 ]
+# Remove calc intermediates
+new_phase17_feats = [c for c in new_phase17_feats if not c.endswith('_calc')]
 # Drop calc intermediates
 for c in ['rho_pack_calc', 'rho_robot_calc', 'rho_charge_calc', 'rho_truck_calc']:
     if c in combined.columns:
@@ -803,12 +841,18 @@ TOP_N_NEW = 30
 selected_new = new_imp.head(TOP_N_NEW)['feature'].tolist()
 dropped_new = [f for f in new_phase17_feats if f not in selected_new]
 
-# l_hardness_score is always included (core feature)
-if 'l_hardness_score' not in selected_new:
-    selected_new.append('l_hardness_score')
-    if 'l_hardness_score' in dropped_new:
-        dropped_new.remove('l_hardness_score')
-    print(f"\n  l_hardness_score force-included", flush=True)
+# Force-include best layout hardness feature
+forced_feat = None
+if 'l_hardness_score' in new_phase17_feats:
+    forced_feat = 'l_hardness_score'
+elif 'l_pack_severity' in new_phase17_feats:
+    forced_feat = 'l_pack_severity'
+
+if forced_feat and forced_feat not in selected_new:
+    selected_new.append(forced_feat)
+    if forced_feat in dropped_new:
+        dropped_new.remove(forced_feat)
+    print(f"\n  {forced_feat} force-included", flush=True)
 
 print(f"\nSelection: kept {len(selected_new)}, dropped {len(dropped_new)}", flush=True)
 

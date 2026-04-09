@@ -657,13 +657,14 @@ Phase 16 lag/diff/rolling features 추가 전, scenario 내 row 순서가 실제
 1. **A) Bottleneck Explosion (12)**: M/M/1 explosion term rho/(1-rho), rho_max, log_explosion, n_saturated, bottleneck_idx, explosion_sum
 2. **B) Demand-Supply Gap (7)**: demand_total (urgency/complexity weighted), supply_effective, ds_gap, ds_ratio, scenario-level peak
 3. **C) Position Features (4)**: position_in_scenario, position_norm, pos_x_explosion_max, pos_x_ds_gap
-4. **D) Layout Hardness Indicators (6)**: l_pack_ratio, l_pack_severity, l_robot_density, l_effective_capacity, l_capacity_demand_ratio, l_hardness_score (target 미사용, layout_info 기반 순수 FE)
+4. **D) Layout Hardness Indicators (up to 6)**: l_pack_ratio, l_pack_severity, l_robot_density, l_effective_capacity, l_capacity_demand_ratio, l_hardness_score (target 미사용, 살아있는 layout columns만 사용, floor_area_sqm dropped 시 fallback)
 5. **E) CV² Features (12)**: 6개 핵심 피처의 scenario 내 CV + CV² (M/G/1 waiting time formula)
 
 ### Codex 리뷰 반영 수정
 - **Category D 재설계**: layout_residual_bias (OOF target encoding) -> layout hardness indicators (순수 domain FE, leakage 없음)
   - StratifiedGroupKFold(layout_id) 구조에서 validation row가 global mean 으로 떨어지는 버그 방지
 - **Ensemble weight normalization**: objective 내부 + 최종 결과 모두 normalize (Phase 16과 동일 패턴)
+- **Category D dropped column 대응**: floor_area_sqm 등 Phase 13s1에서 dropped된 layout columns 사용 방지, available check + fallback
 
 ### 모델 (Phase 16 동일 + Phase 17 피처)
 - 8 models: LGB×3 + XGB + Cat×2 + MLP + TabNet (TabNet 실패 시 7모델 fallback)
