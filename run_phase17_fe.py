@@ -625,97 +625,46 @@ combined['pos_x_ds_gap'] = (
 
 print(f"  Position features: 4", flush=True)
 
-# ---- Category D: Layout Residual Calibration (1 core) ----
-print("\n=== D) Layout Residual Calibration (OOF) ===", flush=True)
+# ---- Category D: Layout Hardness Indicators (domain knowledge, no target) ----
+print("\n=== D) Layout Hardness Indicators (domain knowledge) ===", flush=True)
 
-# Phase 16 OOF reload
-P16_MODEL_NAMES = ['lgb_raw', 'lgb_huber', 'lgb_sqrt', 'xgb', 'cat_log1p', 'cat_raw', 'mlp']
-P16_WEIGHTS = {
-    'lgb_raw': 0.0086, 'lgb_huber': 0.3226, 'lgb_sqrt': 0.1472,
-    'xgb': -0.0752, 'cat_log1p': 0.1776, 'cat_raw': -0.0287, 'mlp': 0.4458,
-}
+# Pack station ratio (core hard layout indicator)
+combined['l_pack_ratio'] = (
+    combined['pack_station_count'] / (combined['robot_total'] + 1)
+).astype('float32')
 
-# Phase 16 ensemble OOF reconstruction
-p16_oof = np.zeros(len(y_train), dtype='float32')
-for name in P16_MODEL_NAMES:
-    ckpt_path = f'output/ckpt_phase16_{name}.pkl'
-    if not os.path.exists(ckpt_path):
-        # Try Drive restore
-        drive_path = f'/content/drive/MyDrive/dacon_ckpt/ckpt_phase16_{name}.pkl'
-        if os.path.exists(drive_path):
-            shutil.copy(drive_path, ckpt_path)
-        else:
-            raise FileNotFoundError(f"Phase 16 checkpoint missing: {name}. Run Phase 16 first.")
+# Pack severity (domain rule)
+combined['l_pack_severity'] = (
+    (combined['pack_station_count'] <= 5).astype(int) * 2 +
+    (combined['pack_station_count'] <= 4).astype(int) * 3 +
+    (combined['pack_station_count'] <= 3).astype(int) * 5
+).astype('int8')
 
-    with open(ckpt_path, 'rb') as f:
-        ckpt = pickle.load(f)
-    p16_oof += P16_WEIGHTS[name] * ckpt['oof']
+# Robot density
+combined['l_robot_density'] = (
+    combined['robot_total'] / (combined['floor_area_sqm'] / 1000 + 1)
+).astype('float32')
 
-# Phase 16 residual
-p16_residual = y_train - p16_oof
-print(f"  Phase 16 OOF MAE: {np.abs(p16_residual).mean():.4f}", flush=True)
-print(f"  P16 residual: mean={p16_residual.mean():.3f}, std={p16_residual.std():.3f}", flush=True)
+# Effective capacity (lower = harder)
+combined['l_effective_capacity'] = (
+    combined['pack_station_count'] * combined['charger_count'] / (combined['robot_total'] + 1)
+).astype('float32')
 
-# OOF layout bias: per fold, compute layout mean residual from tr, map to va
-oof_layout_bias = np.zeros(len(y_train), dtype='float32')
-y_binned_for_cv = pd.qcut(y_train, q=5, labels=False, duplicates='drop')
+# Capacity vs demand (structural load of layout)
+combined['l_capacity_demand_ratio'] = (
+    combined['pack_station_count'] * combined['charger_count'] /
+    (combined.groupby('layout_id')['order_inflow_15m'].transform('mean') + 1)
+).astype('float32')
 
-cv_calib = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
+# Composite hardness score
+combined['l_hardness_score'] = (
+    -combined['l_pack_ratio'] * 10 +
+    combined['l_robot_density'] * 0.1 -
+    combined['l_effective_capacity'] * 5 +
+    combined['l_pack_severity'] * 2
+).astype('float32')
 
-for fold_idx, (tr_idx, va_idx) in enumerate(
-    cv_calib.split(np.arange(len(y_train)), y_binned_for_cv, groups=train_df['layout_id'])
-):
-    # tr fold layout mean residual
-    tr_df_fold = pd.DataFrame({
-        'layout_id': train_df.iloc[tr_idx]['layout_id'].values,
-        'residual': p16_residual[tr_idx]
-    })
-    layout_bias_map = tr_df_fold.groupby('layout_id')['residual'].mean()
-
-    # Global mean (fallback)
-    global_mean = p16_residual[tr_idx].mean()
-
-    # Map to va fold (unmatched -> global mean)
-    va_layout_ids = train_df.iloc[va_idx]['layout_id'].values
-    mapped = pd.Series(va_layout_ids).map(layout_bias_map)
-    oof_layout_bias[va_idx] = mapped.fillna(global_mean).values.astype('float32')
-
-    n_matched = mapped.notna().sum()
-    print(f"    Fold {fold_idx+1}: matched {n_matched}/{len(va_idx)} ({n_matched/len(va_idx)*100:.1f}%)", flush=True)
-
-# Verify: std > 0 otherwise bug
-print(f"\n  Train layout_bias: mean={oof_layout_bias.mean():.3f}, "
-      f"std={oof_layout_bias.std():.3f}, "
-      f"min={oof_layout_bias.min():.3f}, max={oof_layout_bias.max():.3f}", flush=True)
-assert oof_layout_bias.std() > 0.1, "layout_bias variance too small - bug suspected"
-
-# Test: use full train layout bias
-train_layout_bias_map = pd.DataFrame({
-    'layout_id': train_df['layout_id'].values,
-    'residual': p16_residual
-}).groupby('layout_id')['residual'].mean()
-
-global_train_mean = p16_residual.mean()
-test_layout_ids = test_df['layout_id'].values
-test_layout_bias = pd.Series(test_layout_ids).map(train_layout_bias_map).fillna(global_train_mean).values.astype('float32')
-
-n_test_matched = pd.Series(test_layout_ids).map(train_layout_bias_map).notna().sum()
-print(f"  Test layouts matched: {n_test_matched}/{len(test_layout_ids)} ({n_test_matched/len(test_layout_ids)*100:.1f}%)", flush=True)
-print(f"  Test layout_bias: mean={test_layout_bias.mean():.3f}, std={test_layout_bias.std():.3f}", flush=True)
-
-# Add to combined
-combined = combined.sort_values('_original_idx').reset_index(drop=True)
-combined['layout_residual_bias'] = np.concatenate([oof_layout_bias, test_layout_bias])
-
-# Verify: Top 5 hard layouts bias
-HARD_LAYOUTS = ['WH_051', 'WH_073', 'WH_217', 'WH_049', 'WH_098']
-for lid in HARD_LAYOUTS:
-    mask = train_df['layout_id'] == lid
-    if mask.any():
-        bias = oof_layout_bias[mask.values].mean()
-        print(f"    {lid}: OOF bias = {bias:+.2f}", flush=True)
-
-print(f"  Layout calibration features: 1", flush=True)
+print(f"  Layout hardness features: 6", flush=True)
 
 # ---- Category E: Coefficient of Variation Squared (12) ----
 print("\n=== E) CV^2 Features (M/G/1 formula) ===", flush=True)
@@ -755,7 +704,8 @@ new_phase17_feats = [
         'n_saturated', 'n_near_saturated',
         'demand_total', 'supply_effective', 'ds_gap', 'ds_ratio', 's_ds_',
         'position_in_scenario', 'position_norm', 'pos_x_',
-        'layout_residual_bias',
+        'l_pack_ratio', 'l_pack_severity', 'l_robot_density',
+        'l_effective_capacity', 'l_capacity_demand_ratio', 'l_hardness_score',
         'cv_', 'cv_sq_'
     ))
     and c not in ['rho_pack_calc', 'rho_robot_calc', 'rho_charge_calc', 'rho_truck_calc']
@@ -839,7 +789,7 @@ for prefix_group, name in [
     (('explosion_', 'log_explosion_', 'n_satur', 'n_near_satur', 'bottleneck_idx'), 'A. Explosion'),
     (('demand_', 'supply_', 'ds_', 's_ds_'), 'B. Demand-Supply'),
     (('position_', 'pos_x_'), 'C. Position'),
-    (('layout_residual_bias',), 'D. Layout Calib'),
+    (('l_pack_ratio', 'l_pack_severity', 'l_robot_density', 'l_effective_capacity', 'l_capacity_demand_ratio', 'l_hardness_score'), 'D. Layout Hardness'),
     (('cv_',), 'E. CV^2'),
 ]:
     feats_in_cat = [f for f in new_phase17_feats if f.startswith(prefix_group)]
@@ -853,12 +803,12 @@ TOP_N_NEW = 30
 selected_new = new_imp.head(TOP_N_NEW)['feature'].tolist()
 dropped_new = [f for f in new_phase17_feats if f not in selected_new]
 
-# layout_residual_bias is always included (core feature)
-if 'layout_residual_bias' not in selected_new:
-    selected_new.append('layout_residual_bias')
-    if 'layout_residual_bias' in dropped_new:
-        dropped_new.remove('layout_residual_bias')
-    print(f"\n  layout_residual_bias force-included", flush=True)
+# l_hardness_score is always included (core feature)
+if 'l_hardness_score' not in selected_new:
+    selected_new.append('l_hardness_score')
+    if 'l_hardness_score' in dropped_new:
+        dropped_new.remove('l_hardness_score')
+    print(f"\n  l_hardness_score force-included", flush=True)
 
 print(f"\nSelection: kept {len(selected_new)}, dropped {len(dropped_new)}", flush=True)
 
@@ -1078,14 +1028,15 @@ oof_matrix = np.column_stack([oof_preds[n] for n in model_names_available])
 test_matrix = np.column_stack([test_preds[n] for n in model_names_available])
 
 def objective(w, oof_m, yt):
+    w = w / (w.sum() + 1e-12)
     return np.abs((oof_m * w).sum(axis=1) - yt).mean()
 
 x0 = np.ones(len(model_names_available)) / len(model_names_available)
 result = minimize(objective, x0, args=(oof_matrix, y.values),
                   method='Nelder-Mead',
                   options={'xatol': 1e-6, 'fatol': 1e-6, 'maxiter': 3000})
-best_weights = result.x
-ensemble_cv = result.fun
+best_weights = result.x / (result.x.sum() + 1e-12)
+ensemble_cv = np.abs((oof_matrix * best_weights).sum(axis=1) - y.values).mean()
 
 print(f"\n=== Phase 17 Ensemble CV ===", flush=True)
 print(f"CV MAE: {ensemble_cv:.4f}", flush=True)
@@ -1093,7 +1044,7 @@ print(f"Phase 16 baseline: 8.4403", flush=True)
 print(f"Phase 15 baseline: 8.4553", flush=True)
 print(f"Improvement vs P16: {8.4403 - ensemble_cv:+.4f}", flush=True)
 
-print(f"\nWeights:", flush=True)
+print(f"\nWeights (normalized, sum = {best_weights.sum():.4f}):", flush=True)
 for n, w in zip(model_names_available, best_weights):
     print(f"  {n}: {w:.4f}", flush=True)
 
