@@ -454,3 +454,42 @@
 ### 생성된 파일
 - `output/submission_phase13s5a.csv`
 - `output/feature_importance_phase13s5a.png`
+
+## Phase 14: Scenario-level Bidirectional GRU (run_phase14_gru.py)
+
+### 핵심 전략
+- 데이터의 시계열 구조를 본격 활용 (scenario당 25 timestep 시퀀스)
+- 기존 Phase 10~13은 row 단위 GBDT → 시계열 구조 무시
+- AmEx Kaggle 1위 전략 참고: GBDT + GRU ensemble
+- 원본 피처만 사용 (수동 lag/rolling 피처 제외, GRU가 자동 학습)
+
+### 모델 구조: ScenarioGRU
+- Static encoder: Linear(n_static, 256) → GELU → Linear(256, 256)
+- Dynamic encoder: Bidirectional GRU (input=n_dynamic, hidden=256, layers=2)
+- Head: concat(GRU output, static context) → Linear → GELU → Linear → 1
+- Output: per-timestep prediction (B, 25)
+- Loss: L1 (MAE) on log1p target
+- Optimizer: AdamW (lr=1e-3, weight_decay=1e-4)
+- Scheduler: CosineAnnealingLR (T_max=30)
+- Early stopping: patience 5
+
+### 피처 구성
+- Static: layout_info 14개 + layout_type one-hot (~17개)
+- Dynamic: 원본 수치형 ~70개 + 시간 인코딩 5개 (sin/cos hour, sin/cos dow, ts_norm)
+- Total: ~92개 (engineered features 없음)
+
+### 학습
+- CV: StratifiedGroupKFold(layout_id, target_bin=5) — Phase 13s1과 동일
+- Multi-seed: 3 seeds (42, 2024, 777) → seed 평균
+- Batch size: 256, Max epochs: 30
+- Target: log1p 변환
+
+### 결과 (실행 후 업데이트 필요)
+- GRU Multi-seed CV MAE: ?.????
+- Phase 13s1 baseline: 8.5668
+- Blend (13s1 + GRU): ?.????
+
+### 생성된 파일
+- `output/submission_phase14_gru.csv` — GRU 단독
+- `output/phase14_gru_oof.csv` — OOF predictions (블렌딩용)
+- `output/submission_phase14_blend_*.csv` — Phase 13s1과 블렌딩
