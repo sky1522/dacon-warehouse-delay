@@ -612,3 +612,36 @@ Phase 16 lag/diff/rolling features 추가 전, scenario 내 row 순서가 실제
 - MLP scaler leakage 제거: 전역 StandardScaler → fold-internal fit/transform
 - 체크포인트 메타데이터 검증: pipeline_version + feature_cols 불일치 시 캐시 무효화
 - LGB selector deterministic: deterministic=True, force_col_wise=True, n_jobs=1
+
+## Phase 16 Residual Analysis (run_phase16_residual.py)
+
+### 목적
+- Phase 16 ensemble OOF의 residual을 다각도 분석하여 Phase 17 방향 결정
+- 현재 최고: CV 8.4403, Public 9.87947 (5위), 목표 3위권 9.82 (-0.06 개선)
+
+### 분석 항목 (8 Parts)
+1. **OOF 재구성**: 7모델 Nelder-Mead 가중 앙상블 OOF
+2. **Target bin별 residual**: 10분위별 MAE, Bin 9 과소예측 여부
+3. **Layout별 residual**: 난이도 상/하위 layout 비교, Phase 13s1 대비 개선
+4. **Timestep 위치별 residual**: 초기(lag NaN 구간) vs 중기 vs 후기
+5. **피처 값별 residual**: 8개 핵심 피처 quantile별 MAE, 극단 구간 식별
+6. **Top 20 worst predictions**: 극단 오차 row 패턴, 과소/과대 비율
+7. **Scenario 변동성별 residual**: CV 기준 low/mid/high 그룹 비교
+8. **Phase 17 방향 자동 진단**: Bin 9, layout 격차, position, bias 종합
+
+### 결과 (실행 후 업데이트 필요)
+- Phase 16 OOF MAE: ?.????
+- Bin 9 MAE: ?.?? (overall 대비 ?배)
+- Hard layout top5 MAE vs bottom5: ?.?? vs ?.??
+- First 3 positions MAE vs middle: ?.?? vs ?.??
+- Under/over prediction ratio: ?% / ?%
+
+### 생성된 파일
+- `output/phase16_residual/residual_by_bin.png` — Target bin별 MAE + bias
+- `output/phase16_residual/residual_by_bin.csv`
+- `output/phase16_residual/layout_mae_ranking.csv`
+- `output/phase16_residual/residual_by_position.png` — Timestep별 MAE + bias
+- `output/phase16_residual/residual_by_position.csv`
+- `output/phase16_residual/residual_by_feature_value.png` — 피처별 MAE
+- `output/phase16_residual/worst_predictions.csv`
+- `output/phase16_residual/phase17_direction.md` — Phase 17 방향 요약
