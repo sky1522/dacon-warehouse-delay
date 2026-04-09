@@ -21,24 +21,38 @@ warnings.filterwarnings('ignore')
 DRIVE_CKPT_DIR = '/content/drive/MyDrive/dacon_ckpt'
 os.makedirs(DRIVE_CKPT_DIR, exist_ok=True)
 
+PIPELINE_VERSION = "phase16_v1"
 
-def save_ckpt(local_path, data):
+
+def save_ckpt(local_path, data, feature_cols=None):
+    if feature_cols is not None:
+        data['feature_cols'] = list(feature_cols)
+        data['n_features'] = len(feature_cols)
+    data['pipeline_version'] = PIPELINE_VERSION
     with open(local_path, 'wb') as f:
         pickle.dump(data, f)
     drive_path = os.path.join(DRIVE_CKPT_DIR, os.path.basename(local_path))
-    with open(drive_path, 'wb') as f:
-        pickle.dump(data, f)
-    print(f"  Saved: {local_path} + {drive_path}", flush=True)
+    if os.path.exists(os.path.dirname(drive_path)):
+        shutil.copy(local_path, drive_path)
+    print(f"  Saved: {local_path}", flush=True)
 
 
-def load_ckpt(local_path):
+def load_ckpt(local_path, expected_features=None):
     drive_path = os.path.join(DRIVE_CKPT_DIR, os.path.basename(local_path))
-    if os.path.exists(drive_path):
-        with open(drive_path, 'rb') as f:
-            return pickle.load(f)
-    if os.path.exists(local_path):
-        with open(local_path, 'rb') as f:
-            return pickle.load(f)
+    for path in [drive_path, local_path]:
+        if os.path.exists(path):
+            with open(path, 'rb') as f:
+                ckpt = pickle.load(f)
+            # Metadata validation
+            if ckpt.get('pipeline_version') != PIPELINE_VERSION:
+                print(f"  {os.path.basename(path)}: version mismatch, invalidating cache", flush=True)
+                return None
+            if expected_features is not None:
+                cached_fc = ckpt.get('feature_cols')
+                if cached_fc is not None and cached_fc != list(expected_features):
+                    print(f"  {os.path.basename(path)}: feature_cols mismatch, invalidating cache", flush=True)
+                    return None
+            return ckpt
     return None
 
 
@@ -359,7 +373,7 @@ X_tmp = combined.loc[combined['_is_train'] == 1, temp_fc].fillna(0).astype('floa
 
 gkf = GroupKFold(n_splits=5)
 tr_i, va_i = next(gkf.split(X_tmp, y_train, groups=layout_ids_train))
-sel = lgb.LGBMRegressor(objective='regression_l1', n_estimators=500, learning_rate=0.05, num_leaves=127, max_depth=8, min_child_samples=50, feature_fraction=0.7, bagging_fraction=0.8, bagging_freq=5, verbosity=-1, random_state=42)
+sel = lgb.LGBMRegressor(objective='regression_l1', n_estimators=500, learning_rate=0.05, num_leaves=127, max_depth=8, min_child_samples=50, feature_fraction=0.7, bagging_fraction=0.8, bagging_freq=5, verbosity=-1, random_state=42, deterministic=True, force_col_wise=True, n_jobs=1)
 sel.fit(X_tmp.iloc[tr_i], y_train[tr_i], eval_set=[(X_tmp.iloc[va_i], y_train[va_i])], callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)])
 imp_p15 = pd.DataFrame({'feature': temp_fc, 'importance': sel.feature_importances_}).sort_values('importance', ascending=False)
 new_imp_p15 = imp_p15[imp_p15['feature'].isin(p15_agg_feats)]
@@ -451,7 +465,7 @@ X_tmp2 = combined.loc[combined['_is_train'] == 1, temp_fc2].fillna(0).astype('fl
 print(f"  Temp total: {len(temp_fc2)}", flush=True)
 
 tr_i2, va_i2 = next(gkf.split(X_tmp2, y_train, groups=layout_ids_train))
-sel2 = lgb.LGBMRegressor(objective='regression_l1', n_estimators=500, learning_rate=0.05, num_leaves=127, max_depth=8, min_child_samples=50, feature_fraction=0.7, bagging_fraction=0.8, bagging_freq=5, verbosity=-1, random_state=42)
+sel2 = lgb.LGBMRegressor(objective='regression_l1', n_estimators=500, learning_rate=0.05, num_leaves=127, max_depth=8, min_child_samples=50, feature_fraction=0.7, bagging_fraction=0.8, bagging_freq=5, verbosity=-1, random_state=42, deterministic=True, force_col_wise=True, n_jobs=1)
 sel2.fit(X_tmp2.iloc[tr_i2], y_train[tr_i2], eval_set=[(X_tmp2.iloc[va_i2], y_train[va_i2])], callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)])
 
 imp2 = pd.DataFrame({'feature': temp_fc2, 'importance': sel2.feature_importances_}).sort_values('importance', ascending=False)
@@ -509,17 +523,16 @@ def build_sample_weight(y_arr, time_arr):
     return w
 sample_w = build_sample_weight(y.values, time_idx)
 
-# NN preprocessing
-scaler = StandardScaler()
-X_train_nn = scaler.fit_transform(np.nan_to_num(X.values, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)).astype(np.float32)
-X_test_nn = scaler.transform(np.nan_to_num(X_test.values, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)).astype(np.float32)
+# NN preprocessing: raw arrays for fold-internal scaling (no leakage)
+X_train_nn_raw = np.nan_to_num(X.values, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+X_test_nn_raw = np.nan_to_num(X_test.values, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 y_log_nn = y_log.values.astype(np.float32)
 
 oof_preds = {}; test_preds = {}; cv_maes = {}
 
 # --- Model 1: LGB raw+MAE ---
 print("\n  [1] LGB raw+MAE", flush=True)
-ckpt_path = 'output/ckpt_phase16_lgb_raw.pkl'; ckpt = load_ckpt(ckpt_path)
+ckpt_path = 'output/ckpt_phase16_lgb_raw.pkl'; ckpt = load_ckpt(ckpt_path, expected_features=feature_cols)
 if ckpt: oof_preds['lgb_raw'] = ckpt['oof']; test_preds['lgb_raw'] = ckpt['test']; cv_maes['lgb_raw'] = ckpt['cv_mae']; m1_models = []
 else:
     o, t, m1_models = np.zeros(len(X), dtype=np.float32), np.zeros(len(X_test), dtype=np.float32), []
@@ -529,12 +542,12 @@ else:
         p = np.clip(m.predict(X.iloc[vai]), 0, None).astype(np.float32); o[vai] = p; t += np.clip(m.predict(X_test), 0, None).astype(np.float32) / 5; m1_models.append(m)
         print(f"    F{fi+1} MAE: {mean_absolute_error(y.iloc[vai], p):.4f}", flush=True)
     cv_maes['lgb_raw'] = mean_absolute_error(y, o); oof_preds['lgb_raw'] = o; test_preds['lgb_raw'] = t
-    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['lgb_raw']})
+    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['lgb_raw']}, feature_cols=feature_cols)
 print(f"  CV: {cv_maes['lgb_raw']:.4f}", flush=True)
 
 # --- Model 2: LGB log1p+Huber ---
 print("\n  [2] LGB log1p+Huber", flush=True)
-ckpt_path = 'output/ckpt_phase16_lgb_huber.pkl'; ckpt = load_ckpt(ckpt_path)
+ckpt_path = 'output/ckpt_phase16_lgb_huber.pkl'; ckpt = load_ckpt(ckpt_path, expected_features=feature_cols)
 if ckpt: oof_preds['lgb_huber'] = ckpt['oof']; test_preds['lgb_huber'] = ckpt['test']; cv_maes['lgb_huber'] = ckpt['cv_mae']
 else:
     o, t = np.zeros(len(X), dtype=np.float32), np.zeros(len(X_test), dtype=np.float32)
@@ -544,12 +557,12 @@ else:
         p = np.clip(np.expm1(m.predict(X.iloc[vai])), 0, None).astype(np.float32); o[vai] = p; t += np.clip(np.expm1(m.predict(X_test)), 0, None).astype(np.float32) / 5
         print(f"    F{fi+1} MAE: {mean_absolute_error(y.iloc[vai], p):.4f}", flush=True)
     cv_maes['lgb_huber'] = mean_absolute_error(y, o); oof_preds['lgb_huber'] = o; test_preds['lgb_huber'] = t
-    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['lgb_huber']})
+    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['lgb_huber']}, feature_cols=feature_cols)
 print(f"  CV: {cv_maes['lgb_huber']:.4f}", flush=True)
 
 # --- Model 3: LGB sqrt ---
 print("\n  [3] LGB sqrt", flush=True)
-ckpt_path = 'output/ckpt_phase16_lgb_sqrt.pkl'; ckpt = load_ckpt(ckpt_path)
+ckpt_path = 'output/ckpt_phase16_lgb_sqrt.pkl'; ckpt = load_ckpt(ckpt_path, expected_features=feature_cols)
 if ckpt: oof_preds['lgb_sqrt'] = ckpt['oof']; test_preds['lgb_sqrt'] = ckpt['test']; cv_maes['lgb_sqrt'] = ckpt['cv_mae']
 else:
     o, t = np.zeros(len(X), dtype=np.float32), np.zeros(len(X_test), dtype=np.float32)
@@ -559,12 +572,12 @@ else:
         p = np.clip(m.predict(X.iloc[vai]) ** 2, 0, None).astype(np.float32); o[vai] = p; t += np.clip(m.predict(X_test) ** 2, 0, None).astype(np.float32) / 5
         print(f"    F{fi+1} MAE: {mean_absolute_error(y.iloc[vai], p):.4f}", flush=True)
     cv_maes['lgb_sqrt'] = mean_absolute_error(y, o); oof_preds['lgb_sqrt'] = o; test_preds['lgb_sqrt'] = t
-    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['lgb_sqrt']})
+    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['lgb_sqrt']}, feature_cols=feature_cols)
 print(f"  CV: {cv_maes['lgb_sqrt']:.4f}", flush=True)
 
 # --- Model 4: XGB raw ---
 print("\n  [4] XGB raw", flush=True)
-ckpt_path = 'output/ckpt_phase16_xgb.pkl'; ckpt = load_ckpt(ckpt_path)
+ckpt_path = 'output/ckpt_phase16_xgb.pkl'; ckpt = load_ckpt(ckpt_path, expected_features=feature_cols)
 if ckpt: oof_preds['xgb'] = ckpt['oof']; test_preds['xgb'] = ckpt['test']; cv_maes['xgb'] = ckpt['cv_mae']
 else:
     o, t = np.zeros(len(X), dtype=np.float32), np.zeros(len(X_test), dtype=np.float32)
@@ -574,12 +587,12 @@ else:
         p = np.clip(m.predict(X.iloc[vai]), 0, None).astype(np.float32); o[vai] = p; t += np.clip(m.predict(X_test), 0, None).astype(np.float32) / 5
         print(f"    F{fi+1} MAE: {mean_absolute_error(y.iloc[vai], p):.4f}", flush=True)
     cv_maes['xgb'] = mean_absolute_error(y, o); oof_preds['xgb'] = o; test_preds['xgb'] = t
-    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['xgb']})
+    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['xgb']}, feature_cols=feature_cols)
 print(f"  CV: {cv_maes['xgb']:.4f}", flush=True)
 
 # --- Model 5: Cat log1p ---
 print("\n  [5] Cat log1p", flush=True)
-ckpt_path = 'output/ckpt_phase16_cat_log1p.pkl'; ckpt = load_ckpt(ckpt_path)
+ckpt_path = 'output/ckpt_phase16_cat_log1p.pkl'; ckpt = load_ckpt(ckpt_path, expected_features=feature_cols)
 if ckpt: oof_preds['cat_log1p'] = ckpt['oof']; test_preds['cat_log1p'] = ckpt['test']; cv_maes['cat_log1p'] = ckpt['cv_mae']
 else:
     o, t = np.zeros(len(X), dtype=np.float32), np.zeros(len(X_test), dtype=np.float32)
@@ -589,12 +602,12 @@ else:
         p = np.clip(np.expm1(m.predict(X.iloc[vai])), 0, None).astype(np.float32); o[vai] = p; t += np.clip(np.expm1(m.predict(X_test)), 0, None).astype(np.float32) / 5
         print(f"    F{fi+1} MAE: {mean_absolute_error(y.iloc[vai], p):.4f}", flush=True)
     cv_maes['cat_log1p'] = mean_absolute_error(y, o); oof_preds['cat_log1p'] = o; test_preds['cat_log1p'] = t
-    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['cat_log1p']})
+    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['cat_log1p']}, feature_cols=feature_cols)
 print(f"  CV: {cv_maes['cat_log1p']:.4f}", flush=True)
 
 # --- Model 6: Cat raw ---
 print("\n  [6] Cat raw", flush=True)
-ckpt_path = 'output/ckpt_phase16_cat_raw.pkl'; ckpt = load_ckpt(ckpt_path)
+ckpt_path = 'output/ckpt_phase16_cat_raw.pkl'; ckpt = load_ckpt(ckpt_path, expected_features=feature_cols)
 if ckpt: oof_preds['cat_raw'] = ckpt['oof']; test_preds['cat_raw'] = ckpt['test']; cv_maes['cat_raw'] = ckpt['cv_mae']
 else:
     o, t = np.zeros(len(X), dtype=np.float32), np.zeros(len(X_test), dtype=np.float32)
@@ -604,7 +617,7 @@ else:
         p = np.clip(m.predict(X.iloc[vai]), 0, None).astype(np.float32); o[vai] = p; t += np.clip(m.predict(X_test), 0, None).astype(np.float32) / 5
         print(f"    F{fi+1} MAE: {mean_absolute_error(y.iloc[vai], p):.4f}", flush=True)
     cv_maes['cat_raw'] = mean_absolute_error(y, o); oof_preds['cat_raw'] = o; test_preds['cat_raw'] = t
-    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['cat_raw']})
+    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['cat_raw']}, feature_cols=feature_cols)
 print(f"  CV: {cv_maes['cat_raw']:.4f}", flush=True)
 
 # --- Model 7: MLP ---
@@ -618,26 +631,31 @@ def build_mlp(dim):
     x = layers.Dense(64, activation='relu')(x); out = layers.Dense(1)(x)
     mdl = Model(inp, out); mdl.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss='mae'); return mdl
 
-ckpt_path = 'output/ckpt_phase16_mlp.pkl'; ckpt = load_ckpt(ckpt_path)
+ckpt_path = 'output/ckpt_phase16_mlp.pkl'; ckpt = load_ckpt(ckpt_path, expected_features=feature_cols)
 if ckpt: oof_preds['mlp'] = ckpt['oof']; test_preds['mlp'] = ckpt['test']; cv_maes['mlp'] = ckpt['cv_mae']
 else:
     o, t = np.zeros(len(X), dtype=np.float32), np.zeros(len(X_test), dtype=np.float32)
     for fi, (tri, vai) in enumerate(folds):
         tf.random.set_seed(42); np.random.seed(42)
-        mdl = build_mlp(X_train_nn.shape[1])
-        mdl.fit(X_train_nn[tri], y_log_nn[tri], validation_data=(X_train_nn[vai], y_log_nn[vai]), epochs=100, batch_size=512, callbacks=[keras_callbacks.EarlyStopping('val_loss', patience=10, restore_best_weights=True, verbose=0), keras_callbacks.ReduceLROnPlateau('val_loss', factor=0.5, patience=5, min_lr=1e-5, verbose=0)], verbose=0)
-        p = np.clip(np.expm1(mdl.predict(X_train_nn[vai], verbose=0).flatten()), 0, None).astype(np.float32); o[vai] = p
-        t += np.clip(np.expm1(mdl.predict(X_test_nn, verbose=0).flatten()), 0, None).astype(np.float32) / 5
+        # Fold-internal scaling (no leakage)
+        fold_scaler = StandardScaler()
+        Xtr = np.clip(fold_scaler.fit_transform(X_train_nn_raw[tri]), -5, 5).astype('float32')
+        Xva = np.clip(fold_scaler.transform(X_train_nn_raw[vai]), -5, 5).astype('float32')
+        Xte = np.clip(fold_scaler.transform(X_test_nn_raw), -5, 5).astype('float32')
+        mdl = build_mlp(Xtr.shape[1])
+        mdl.fit(Xtr, y_log_nn[tri], validation_data=(Xva, y_log_nn[vai]), epochs=100, batch_size=512, callbacks=[keras_callbacks.EarlyStopping('val_loss', patience=10, restore_best_weights=True, verbose=0), keras_callbacks.ReduceLROnPlateau('val_loss', factor=0.5, patience=5, min_lr=1e-5, verbose=0)], verbose=0)
+        p = np.clip(np.expm1(mdl.predict(Xva, verbose=0).flatten()), 0, None).astype(np.float32); o[vai] = p
+        t += np.clip(np.expm1(mdl.predict(Xte, verbose=0).flatten()), 0, None).astype(np.float32) / 5
         print(f"    F{fi+1} MAE: {mean_absolute_error(y.values[vai], p):.4f}", flush=True)
         del mdl; tf.keras.backend.clear_session(); gc.collect()
     cv_maes['mlp'] = mean_absolute_error(y, o); oof_preds['mlp'] = o; test_preds['mlp'] = t
-    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['mlp']})
+    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['mlp']}, feature_cols=feature_cols)
 print(f"  CV: {cv_maes['mlp']:.4f}", flush=True)
 
 # --- Model 8: TabNet ---
 print("\n  [8] TabNet", flush=True)
 from pytorch_tabnet.tab_model import TabNetRegressor
-ckpt_path = 'output/ckpt_phase16_tabnet.pkl'; ckpt = load_ckpt(ckpt_path)
+ckpt_path = 'output/ckpt_phase16_tabnet.pkl'; ckpt = load_ckpt(ckpt_path, expected_features=feature_cols)
 if ckpt: oof_preds['tabnet'] = ckpt['oof']; test_preds['tabnet'] = ckpt['test']; cv_maes['tabnet'] = ckpt['cv_mae']
 else:
     o, t = np.zeros(len(X), dtype=np.float32), np.zeros(len(X_test), dtype=np.float32)
@@ -653,7 +671,7 @@ else:
         print(f"    F{fi+1} MAE: {mean_absolute_error(y.values[vai], p):.4f}", flush=True)
         del mdl; gc.collect()
     cv_maes['tabnet'] = mean_absolute_error(y, o); oof_preds['tabnet'] = o; test_preds['tabnet'] = t
-    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['tabnet']})
+    save_ckpt(ckpt_path, {'oof': o, 'test': t, 'cv_mae': cv_maes['tabnet']}, feature_cols=feature_cols)
 print(f"  CV: {cv_maes['tabnet']:.4f}", flush=True)
 
 # ##############################################################

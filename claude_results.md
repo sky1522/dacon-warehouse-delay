@@ -607,3 +607,8 @@ Phase 16 lag/diff/rolling features 추가 전, scenario 내 row 순서가 실제
 - `output/submission_phase16.csv`
 - `output/feature_importance_phase16.png`
 - `output/phase16_feature_importance.csv`
+
+### Phase 16 버그 수정
+- MLP scaler leakage 제거: 전역 StandardScaler → fold-internal fit/transform
+- 체크포인트 메타데이터 검증: pipeline_version + feature_cols 불일치 시 캐시 무효화
+- LGB selector deterministic: deterministic=True, force_col_wise=True, n_jobs=1
