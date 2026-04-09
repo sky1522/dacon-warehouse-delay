@@ -429,3 +429,28 @@
 - `output/phase13s4_bin9/bin9_analysis.png`
 - `output/phase13s4_bin9/bin9_roc.png`
 - `output/phase13s4_bin9/summary.md`
+
+## Phase 13 Step 5A: Bin9-aware Features (run_phase13_step5a.py)
+
+### 핵심 전략
+- "bin 9를 정확히 예측"이 아닌 "bin 9라는 사실을 모델에 알려준다"
+- Phase 13s1 기반 (tail weight 없음, 8 모델)
+- 신규 피처 7개만 추가 → 총 353개
+
+### 신규 Bin9 피처 7개
+1. **Rule-based (5)**: pack_full, pack_starved, truck_blocked, pack_critical, high_robot_load
+2. **OOF Bin9 Probability (1)**: LGBM 분류기 OOF 확률 (AUC ~0.92, 동일 CV fold 사용)
+3. **Layout Bin9 Rate (1)**: OOF target encoding (layout별 bin9 발생률)
+
+### 결과 (실행 후 업데이트 필요)
+- Bin9 classifier OOF AUC: ?.????
+- 총 피처 수: 353 (346 + 7)
+- 트리 6모델: 각 ?.????
+- Level 1/Level 2: ?.????
+- Phase 13s1 CV: 8.5668 → Phase 13s5a CV: ?.????
+- Hard layout bin 9 residual: baseline +95.33 → ?.??
+- All bin 9 residual: baseline +118.0 → ?.??
+
+### 생성된 파일
+- `output/submission_phase13s5a.csv`
+- `output/feature_importance_phase13s5a.png`
