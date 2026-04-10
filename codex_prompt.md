@@ -1,23 +1,56 @@
-# 역할: 데이콘 "스마트 창고 출고 지연 예측 AI 경진대회" EDA 조사
+codex --reasoning high "C:\dev\dacon-warehouse-delay 프로젝트 전수조사. codex_results.md에 저장.
 
-## 배경
-- 대회: 데이콘 월간 대회, 스마트 물류창고 출고 지연 예측
-- 타겟: avg_delay_minutes_next_30m (향후 30분간 평균 출고 지연 시간, 회귀)
-- 평가지표: MAE
-- 데이터: train.csv, test.csv, layout_info.csv, sample_submission.csv
-- 경로: C:\dev\dacon-warehouse-delay\data\
+## 목표
+파일 정리, 문서 현황, 불필요한 파일 식별을 위한 종합 조사
 
-## 수행 작업
-1. 각 파일의 shape, columns, dtypes, head(10) 확인
-2. train.csv의 90개 피처 목록과 의미 추정 (컬럼명 기반)
-3. 타겟(avg_delay_minutes_next_30m) 분포 분석 — 평균, 중앙값, 왜도, 이상치
-4. 결측치/중복값 현황 정리
-5. 피처 간 상관관계 Top 20 (타겟과의 상관계수 기준)
-6. layout_info.csv와 train.csv의 조인 키 및 활용 방안 분석
-7. 시나리오(scenario_id) 및 타임슬롯(timeslot) 구조 파악 — 12,000 시나리오 × 25 타임슬롯인지 확인
-8. 피처 카테고리 분류 (주문 관련, 로봇 관련, 배터리 관련, 혼잡도 관련, 패킹 관련 등)
+## 1. 루트 레벨 파일 전수조사
+모든 .py, .md, .csv, .json, .yaml 파일 나열 후 각각:
+- 파일 크기, 마지막 수정 시간
+- 목적 (코드 첫 20줄 또는 주석 기반 추정)
+- 상태: [active/deprecated/duplicate/temporary/unknown]
+- 삭제/유지/리팩터 판단
+- 중복 파일 그룹 식별 (blend_temp.py, codex_results.new.md 등)
 
-## 출력
-- 분석 결과를 codex_results.md에 저장
-- 핵심 발견사항을 상단에 요약
-- 후속 피처 엔지니어링 및 모델링 방향 제안 포함
+## 2. run_phase*.py 의존성 맵
+각 Phase 파일에 대해:
+- 입력: 어떤 ckpt_*.pkl 또는 CSV 파일을 로드하는가
+- 출력: 어떤 ckpt_*.pkl, submission_*.csv 생성하는가
+- 다른 Phase에 의존하는지 (예: phase18 → phase16 ckpt)
+- 고아 파일 식별 (아무도 참조 안 하고 결과도 안 쓰이는 파일)
+- 삭제 가능 후보 표시
+
+## 3. 문서 파일 현황
+각 .md 파일 분석:
+- CLAUDE.md, README.md, PROGRESS.md, DECISION.md, CHANGELOG.md 존재 여부
+- claude_results.md: 어느 Phase까지 기록? 빠진 Phase?
+- codex_results.md, codex_results.old.md, codex_results.new.md: 중복/백업 상태
+- claude_prompt.md, codex_prompt.md: 어떤 내용? 유지 가치?
+- docs/phases/*.md: 모든 Phase 커버하는지, 내용 완성도
+- docs/decisions/*.md: 있는지
+- docs/analysis/*.md: 있는지
+
+## 4. 체크포인트/산출물 파일 현황
+- output/ 실제 존재하는 ckpt_*.pkl 목록 (로컬)
+- claude_results.md가 언급하는 ckpt vs 실제 존재 ckpt 대조
+- submission_*.csv 중복/버전 (submission_phase16.csv vs submission_phase16_backup.csv 등)
+- 삭제 가능 임시 파일 (blend_p7p8_60.csv, blend_temp.py 등)
+
+## 5. 정리 권장 사항 (카테고리별)
+### A. 즉시 삭제 가능
+- 임시 파일, 중복 백업, 미완성 실험
+### B. 아카이브 (archive/ 폴더로 이동)
+- Phase 1~10 등 구식이지만 참조 가치 있는 것
+### C. 리팩터 필요
+- 코드 중복 심한 phase15/16/17/18 → 공통 모듈 분리
+### D. 문서화 필요
+- README.md, PROGRESS.md, DECISION.md 생성
+### E. 업데이트 필요
+- 미완성 섹션, 오래된 정보
+
+## 6. 우선순위 정리 계획
+- P0 (오늘): 필수 문서 생성 (README, PROGRESS, DECISION)
+- P1 (내일): 불필요 파일 삭제, archive 이동
+- P2 (이번 주): 코드 리팩터
+- P3 (다음 주): 고급 문서화
+
+결과는 마크다운, 각 섹션 H2 헤더, 파일은 표 형식으로 나열"

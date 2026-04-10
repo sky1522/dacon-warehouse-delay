@@ -174,7 +174,7 @@
   cv: "[unknown]"
   public: null
   rank: null
-  submission: submission_phase14.csv
+  submission: submission_phase14_gru.csv
   commit: 06ed352
   notes: bidirectional GRU (25 timestep sequences) - failed
 
@@ -189,12 +189,12 @@
   notes: 1000+ aggregation features (scenario/layout/hour/cross) -> top 200
 
 - phase: phase15b
-  script: run_phase15b.py
+  script: run_phase15b_tabnet.py
   date: 2026-04-XX
   cv: "[unknown]"
   public: null
   rank: null
-  submission: submission_phase15b.csv
+  submission: submission_phase15_full.csv
   commit: b4a24c6
   notes: TabNet retrained + 8-model ensemble + P13s1 reblend
 

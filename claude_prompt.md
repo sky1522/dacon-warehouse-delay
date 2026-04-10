@@ -1,227 +1,93 @@
-# 데이콘 스마트 창고 출고 지연 예측 — Phase 12a: Queueing Theory 기반 피처 추가
+3단계 작업. 각 단계 완료 후 보고. 코드 실행 금지.
 
-## 프로젝트 경로
-C:\dev\dacon-warehouse-delay\
+## STEP 1: 즉시 정리 (P0)
 
-## 현재 상태
-- 최고 Public MAE: 10.037 (Blend P10 70% + P7P8 30%, 20위)
-- Phase 10 단독 Public: 10.039 (CV 8.577)
-- Phase 11/11b 실패 확인 (adv weight가 일반화 망침)
-- 목표: 10위 이내 (Public 9.94 이하)
+### 1.1 삭제
+- blend_temp.py
+- blend_p7p8_60.csv  
+- codex_results.old.md
+- codex_results.new.md
 
-## ⚠️ 필수 사항
-- run_phase10.py를 기반으로 확장 (adv weight 절대 사용 금지)
-- run_phase11b.py의 Drive 체크포인트 헬퍼(save_ckpt/load_ckpt)를 재사용
-- 체크포인트 파일명: ckpt_phase12a_{model_name}.pkl
-- submission 파일명: submission_phase12a.csv
-- concat+sort 후 test ID 순서 복원 필수
-- assert (submission['ID'] == sample_sub['ID']).all()
-- run_phase12a.py 작성만 할 것. 실행하지 말 것.
-- float32 메모리 최적화
-- 중간 진행상황 print 충분히 포함
-- drive.mount()는 스크립트 내부에서 호출 금지 (노트북에서 이미 마운트됨)
+### 1.2 archive/ 폴더 생성 + 이동
+mkdir archive/{phases_01_12,analysis,reviews}
 
-## 확인된 원본 컬럼
-### train.csv (동적)
-- robot_active, robot_idle, robot_charging, robot_utilization
-- avg_trip_distance, avg_charge_wait
-- charge_queue_length, pack_utilization, loading_dock_util
-- order_inflow_15m, congestion_score, unique_sku_15m
-- avg_package_weight_kg
+archive/phases_01_12/ 로:
+- run_phase1.py ~ run_phase10.py
+- run_phase11.py, run_phase11b.py, run_phase12a.py
 
-### layout_info.csv (Phase 10에서 이미 join됨)
-- robot_total, charger_count, pack_station_count
-- aisle_width_avg, intersection_count, one_way_ratio
-- floor_area_sqm 등
+archive/analysis/ 로:
+- run_phase13_step5a.py
+- run_phase13s4_bin9_eda.py
+- run_phase14_gru.py
+- run_phase15b_tabnet.py
+- run_phase3b_analysis.py
+- run_eda_deep.py
 
-⚠️ dock_count 컬럼은 없음. loading_dock_util만 사용.
-⚠️ avg_trip_time 컬럼 없음. avg_trip_distance로 대체.
+### 1.3 메타데이터 수정
+experiments.yaml:
+- phase14: submission → submission_phase14_gru.csv
+- phase15b: script → run_phase15b_tabnet.py, submission → submission_phase15_full.csv
 
-## 전략
-Phase 10과 완전히 동일한 구조 + Queueing Theory 피처 42개 추가만.
-논문 3편의 이론 기반 피처가 핵심:
-1. Unlocking Real-Time Decision-Making in Warehouses (Transport Research Part E, 2024)
-2. Amazon Science: Congestion Prediction for Large Fleets of Mobile Robots (IEEE 2023)
-3. Analysis of Robotic Mobile Fulfillment Systems Considering Congestion (MDPI 2021)
+### 1.4 필수 문서 생성
+- README.md (현재 5위 9.86, 빠른 시작, 디렉토리 구조)
+- PROGRESS.md (Phase별 한 줄 요약, 현재 → 다음)
+- DECISION.md (docs/decisions/ index 역할)
+- CHANGELOG.md (구조 변경 이력)
 
-Phase 11의 adv weight / Transformer 는 절대 사용하지 않음.
-8모델 (트리 6 + Keras MLP + TabNet) 그대로.
+### 1.5 누락 phase 문서
+docs/phases/ 추가:
+- phase13s2.md (hard layout 분석)
+- phase13s4.md (bin9 EDA)
+- phase16_residual.md
+- phase19.md (multi-seed 실패 회고)
 
-## 수행 작업 (run_phase12a.py)
+## STEP 2: Phase 20 Pre-EDA 스크립트 작성
 
-### 1. 데이터 준비 + 피처 생성 (Phase 10과 동일)
-run_phase10.py의 피처 생성 함수 전체 재사용:
-- 시계열 피처 64개
-- Phase 3B 인터랙션 8개
-- Onset 8개
-- Expanding mean 30개
-- 비선형 임계값 7개
-- 위상 6개
-- 경쟁자 피처 54개
-- Expanding 확장 20개
-(총 319개)
+run_phase20_eda.py 작성. 4가지 질문:
 
-### 2. ★ 신규: Queueing Theory 피처 추가 (42개)
+### Q1: Adversarial AUC
+train vs test 분류 가능도 측정
+- AUC > 0.7: shift 심각, adversarial weight 효과 클 것
+- AUC < 0.55: shift 없음, weight 불필요
 
-피처 추가는 layout join이 완료된 df에 적용.
-반드시 scenario_id, time_idx로 sort한 상태에서 diff/rolling 계산.
+### Q2: Median vs Zero Fill 차이
+order_inflow_15m, robot_active, battery_mean 3개 column:
+- NaN rate
+- median 값
+- fill(0) vs fill(median) 분포 차이
 
-#### A) Utilization / Traffic Intensity (16개)
-```python
-EPS = 1e-3
+### Q3: Adversarial Holdout 검증
+adv_proba top 20% 추출 후:
+- holdout 분포 vs test 분포 vs train_remain 분포 비교
+- 5개 핵심 column에서 mean gap 측정
 
-# 기본 rho 4개
-df['q_rho_robot'] = (df['robot_active'] / (df['robot_total'] + EPS)).clip(0, 0.99)
-df['q_rho_charger'] = (df['robot_charging'] / (df['charger_count'] + EPS)).clip(0, 0.99)
-df['q_rho_pack'] = df['pack_utilization'].clip(0, 0.99).astype('float32')
-df['q_rho_loading'] = df['loading_dock_util'].clip(0, 0.99).astype('float32')
+### Q4: Phase 16 OOF의 holdout MAE
+phase16 ckpt 복원 후:
+- Full CV MAE
+- Train remain MAE  
+- Holdout MAE ← Public(9.87947)에 가까운지 확인
 
-# 비선형 변환 (Pollaczek-Khinchin 공식 기반)
-for name in ['robot', 'charger', 'pack', 'loading']:
-    rho = df[f'q_rho_{name}']
-    df[f'q_rho_{name}_sq'] = (rho ** 2).astype('float32')
-    df[f'q_rho_{name}_inv'] = (1.0 / (1.0 - rho + EPS)).astype('float32')  # 1/(1-ρ)
-    df[f'q_pk_{name}'] = (rho**2 / (1.0 - rho + EPS)).astype('float32')  # ρ²/(1-ρ) P-K 핵심
-# 4개 기본 + 4×3 = 16개
-```
+## STEP 3: Phase 20 본 스크립트 작성 준비
 
-#### B) Little's Law 기반 예상 대기시간 (6개)
-```python
-# W = L/λ
-arrival_rate = (df['order_inflow_15m'] / 15.0).astype('float32')  # per minute
+run_phase20_clean.py 작성 (실행 금지):
 
-df['q_arrival_rate'] = arrival_rate
-df['q_expected_charge_wait'] = (df['charge_queue_length'] / (arrival_rate + EPS)).astype('float32')
+### 변경 1: fillna(median)
+30개 핵심 컬럼 median fill, 나머지는 0
 
-# 효과적 서비스율
-df['q_effective_service_robot'] = (df['robot_active'] / (df['avg_trip_distance'] + EPS)).astype('float32')
+### 변경 2: Adversarial Validation Sample Weight
+train_proba / (1 - train_proba), clip [0.1, 10], normalize
 
-# Arrival vs Service gap (양수면 대기열 증가 중)
-df['q_arrival_service_gap'] = (arrival_rate - df['q_effective_service_robot']).astype('float32')
+### 변경 3: MLP Loss = (RMSE + MAE) / 2
 
-# Throughput
-df['q_throughput_robot'] = (df['robot_active'] * (1.0 - df['congestion_score'])).astype('float32')
-df['q_throughput_pack'] = (df['pack_station_count'] * df['pack_utilization']).astype('float32')
-```
-
-#### C) Bottleneck Detection (8개)
-```python
-# 각 단계별 사용률 (이미 위에서 계산)
-stages_cols = ['q_rho_robot', 'q_rho_charger', 'q_rho_pack', 'q_rho_loading']
-stages_df = df[stages_cols]
-
-df['q_bottleneck_max'] = stages_df.max(axis=1).astype('float32')
-df['q_bottleneck_min'] = stages_df.min(axis=1).astype('float32')
-df['q_bottleneck_mean'] = stages_df.mean(axis=1).astype('float32')
-df['q_bottleneck_std'] = stages_df.std(axis=1).astype('float32')
-df['q_bottleneck_gap'] = (df['q_bottleneck_max'] - df['q_bottleneck_mean']).astype('float32')
-
-# 연쇄 병목
-df['q_cascade_load_pack'] = (df['q_rho_loading'] * df['q_rho_pack']).astype('float32')
-df['q_cascade_pack_robot'] = (df['q_rho_pack'] * df['q_rho_robot']).astype('float32')
-df['q_cascade_all'] = (df['q_rho_loading'] * df['q_rho_pack'] * df['q_rho_robot']).astype('float32')
-```
-
-#### D) Queue Stability Indicators (4개)
-```python
-df['q_unstable_robot'] = (df['q_rho_robot'] > 0.9).astype('float32')
-df['q_unstable_charger'] = (df['q_rho_charger'] > 0.9).astype('float32')
-df['q_unstable_pack'] = (df['q_rho_pack'] > 0.9).astype('float32')
-df['q_unstable_count'] = (df['q_unstable_robot'] + df['q_unstable_charger'] + df['q_unstable_pack']).astype('float32')
-```
-
-#### E) Demand Surge / Time-varying (8개)
-```python
-# 반드시 scenario_id, time_idx로 sort된 상태에서
-df = df.sort_values(['scenario_id', 'time_idx']).reset_index(drop=True)
-
-# ρ 급변화
-df['q_rho_robot_change'] = df.groupby('scenario_id')['q_rho_robot'].diff().fillna(0).astype('float32')
-df['q_rho_robot_accel'] = df.groupby('scenario_id')['q_rho_robot_change'].diff().fillna(0).astype('float32')
-
-# 최근 3 timestep의 평균 ρ
-df['q_rho_robot_roll3'] = (
-    df.groupby('scenario_id')['q_rho_robot']
-      .rolling(3, min_periods=1).mean()
-      .reset_index(level=0, drop=True)
-      .astype('float32')
-)
-
-# Queue buildup rate
-df['q_queue_growth'] = df.groupby('scenario_id')['charge_queue_length'].diff().fillna(0).astype('float32')
-df['q_queue_growth_roll3'] = (
-    df.groupby('scenario_id')['q_queue_growth']
-      .rolling(3, min_periods=1).mean()
-      .reset_index(level=0, drop=True)
-      .astype('float32')
-)
-
-# Inflow 급변
-df['q_inflow_change'] = df.groupby('scenario_id')['order_inflow_15m'].diff().fillna(0).astype('float32')
-df['q_inflow_accel'] = df.groupby('scenario_id')['q_inflow_change'].diff().fillna(0).astype('float32')
-
-# 누적 불안정 카운트 (시나리오 내)
-df['q_cum_unstable'] = df.groupby('scenario_id')['q_unstable_count'].cumsum().astype('float32')
-
-# 총: 16 + 6 + 8 + 4 + 8 = 42개
-```
-
-### 3. 전처리
-- inf/NaN 처리: np.nan_to_num(x, nan=0.0, posinf=1e6, neginf=-1e6)
-- 모든 신규 피처 float32 확인
-
-### 4. 피처 수 확인
-```python
-print(f"Phase 10 기존 피처: 319개")
-print(f"Queueing theory 신규: 42개")
-print(f"총 피처 수: ~361개")
-```
-
-### 5. 모델 학습 (Phase 10과 완전 동일)
-- 트리 6모델 (기존 sample_weight만, adv weight 없음)
-- Keras MLP
-- TabNet
-- 체크포인트: ckpt_phase12a_{model_name}.pkl
-- Drive 동시 저장
-
-### 6. Level 1 가중 평균
-- 트리만
-- 트리+NN 8모델
-- 두 가지 비교
-
-### 7. Level 2 LGB 스태킹 (8모델)
-- 메타 피처: 8 OOF + 6 원본 = 14개
-- np.nan_to_num 적용
-
-### 8. 결과 출력
-=== Phase 12a 결과 ===
-신규 피처: Queueing Theory 42개
-총 피처 수: ~361개
-트리 6모델 CV MAE:
-...
-NN 모델:
-keras_mlp           : X.XXXX
-tabnet              : X.XXXX
-Level 1 트리만:           X.XXXX
-Level 1 트리+NN (8모델):  X.XXXX
-Level 2 LGB 스태킹:       X.XXXX
-최종 선택:                X.XXXX
-Phase 10 대비 개선:       X.XXXX
-Queueing theory 피처 중 Top 30 진입: X개
-(q_ 접두사 필터링)
-
-### 9. 제출 파일
-- output/submission_phase12a.csv
-- /content/drive/MyDrive/dacon_ckpt/submission_phase12a.csv 동시 저장
-
-### 10. 피처 중요도
-- LGB raw+MAE 기준 Top 30 시각화
-- feature_importance_phase12a.png
-- Queueing theory 피처(q_ 접두사) Top 30 진입 개수 별도 출력
+### 변경 4: Adversarial Holdout (top 20% test-like)
+학습은 80%, 최종 검증은 holdout MAE
 
 ## 규칙
-- 시각화: 영문 폰트
-- 결과를 claude_results.md에 Phase 12a 섹션 추가
-- run_phase12a.py 작성만, 실행 금지
-- 커밋 메시지: "feat: Phase 12a - queueing theory features (Little's Law, Pollaczek-Khinchin, bottleneck detection)"
-- 커밋 + 푸시
+- 작성/이동/삭제만, 코드 실행 절대 금지
+- Drive에서 ckpt 복원이 필요하면 그 코드만 작성, 실행은 사용자가
+- 각 STEP 완료 후 변경사항 요약
+- 커밋 3개:
+  1. "chore: P0 cleanup (delete temp, archive old phases, fix experiments.yaml)"
+  2. "docs: README/PROGRESS/DECISION/CHANGELOG + missing phase docs"
+  3. "feat: Phase 20 pre-EDA + clean preprocessing draft"
+- 푸시

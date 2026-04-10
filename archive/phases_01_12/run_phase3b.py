@@ -242,7 +242,7 @@ def optuna_callback(study, trial):
     if (trial.number + 1) % 10 == 0:
         print(f"  Trial {trial.number+1}/50: best MAE={study.best_value:.4f}", flush=True)
 
-study = optuna.create_study(direction='minimize', seed=42)
+study = optuna.create_study(direction='minimize', sampler=optuna.samplers.TPESampler(seed=42))
 study.optimize(objective, n_trials=50, callbacks=[optuna_callback])
 
 best_params = study.best_params
