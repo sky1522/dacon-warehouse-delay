@@ -722,3 +722,16 @@ Phase 16 lag/diff/rolling features 추가 전, scenario 내 row 순서가 실제
 - `output/submission_phase18.csv`
 - `output/ckpt_phase18_extreme_mlp.pkl`
 - `output/phase18_feature_importance.csv`
+
+---
+
+## 환경 조성 완료
+
+### 생성된 파일
+- `CLAUDE.md` — 프로젝트 개요, 워크플로우, 핵심 교훈
+- `requirements.txt` — Python 의존성
+- `.gitignore` — 확장 (output/, pkl, csv, png 등)
+- `.claude/settings.local.json` — hooks (py_compile, results reminder)
+- `.claude/skills/` — 5개 skill (phase-runner, checkpoint-manager, phase-results, dacon-cv, blend-optimizer)
+- `docs/phases/` — 18개 Phase 회고 (5개 실패 회고 상세)
+- `experiments.yaml` — Phase별 결과 ledger

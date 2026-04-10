@@ -2,3 +2,22 @@ data/*.csv
 __pycache__/
 .ipynb_checkpoints/
 *.pyc
+
+# Output artifacts
+output/
+catboost_info/
+*.pkl
+*.pt
+*.png
+*.csv
+blend_*.csv
+*.tfevents
+
+# Codex results (local temp)
+codex_results*.md
+
+# Claude local settings
+.claude/settings.local.json
+
+# Notebooks
+notebooks/.ipynb_checkpoints/

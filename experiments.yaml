@@ -1,0 +1,229 @@
+- phase: baseline
+  script: notebooks/02_baseline.ipynb
+  date: 2026-03-XX
+  cv: 9.1820
+  public: null
+  rank: null
+  submission: submission_best.csv
+  commit: "[unknown]"
+  notes: log1p target LightGBM baseline
+
+- phase: phase1
+  script: run_phase1.py
+  date: 2026-03-XX
+  cv: 8.8508
+  public: 10.249
+  rank: 14
+  submission: submission_phase1.csv
+  commit: "[unknown]"
+  notes: 64 time-series features (lag/rolling/diff/cumsum)
+
+- phase: phase2
+  script: run_phase2.py
+  date: 2026-03-XX
+  cv: 8.8253
+  public: null
+  rank: null
+  submission: submission_phase2.csv
+  commit: "[unknown]"
+  notes: 3-model ensemble (LGB 0.52 + Cat 0.33 + XGB 0.15)
+
+- phase: phase3a
+  script: run_phase3a.py
+  date: 2026-03-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase3a.csv
+  commit: "[unknown]"
+  notes: feature selection + regularization + layout features
+
+- phase: phase3b
+  script: run_phase3b.py
+  date: 2026-03-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase3b.csv
+  commit: "[unknown]"
+  notes: residual features + dual model + Optuna LGB
+
+- phase: phase5
+  script: run_phase5.py
+  date: 2026-03-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase5.csv
+  commit: "[unknown]"
+  notes: 300 GroupBy features + target lag + recursive test prediction
+
+- phase: phase6
+  script: run_phase6.py
+  date: 2026-03-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase6.csv
+  commit: "[unknown]"
+  notes: 22 domain features + Optuna retune + target transform comparison
+
+- phase: phase7
+  script: run_phase7.py
+  date: 2026-03-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase7.csv
+  commit: "[unknown]"
+  notes: sample weights (q90/q95/q99) + 4-model diversity ensemble
+
+- phase: phase8
+  script: run_phase8.py
+  date: 2026-03-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase8.csv
+  commit: "[unknown]"
+  notes: 54 competitor features + 6-model 2-level stacking
+
+- phase: phase9
+  script: run_phase9.py
+  date: 2026-03-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase9.csv
+  commit: "[unknown]"
+  notes: Optuna retune (319 features) + 3-seed blending + LGB stacking
+
+- phase: phase10
+  script: run_phase10.py
+  date: 2026-03-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase10.csv
+  commit: "[unknown]"
+  notes: 8-model (6 tree + Keras MLP + TabNet) stacking
+
+- phase: phase11
+  script: run_phase11.py
+  date: 2026-03-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase11.csv
+  commit: "[unknown]"
+  notes: adversarial validation + Transformer sequence model (failed)
+
+- phase: phase12a
+  script: run_phase12a.py
+  date: 2026-03-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase12a.csv
+  commit: "[unknown]"
+  notes: 42 queueing theory features (Little's Law, P-K formula)
+
+- phase: phase13s1
+  script: run_phase13_step1.py
+  date: 2026-04-XX
+  cv: 8.5668
+  public: 10.0078
+  rank: null
+  submission: submission_phase13s1.csv
+  commit: "[unknown]"
+  notes: StratifiedGroupKFold(layout_id) + 7 EDA features - 22 low-corr layout
+
+- phase: phase13s3
+  script: run_phase13_step3.py
+  date: 2026-04-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase13s3.csv
+  commit: be324af
+  notes: tail-aware (LGB Q90/Q75, XGB log1p+Huber) + 11 models
+
+- phase: phase13s4
+  script: run_phase13s4_bin9_eda.py
+  date: 2026-04-XX
+  cv: null
+  public: null
+  rank: null
+  submission: null
+  commit: 46d2364
+  notes: bin9 EDA analysis (KS test, classifier AUC, sub-patterns)
+
+- phase: phase13s5a
+  script: run_phase13_step5a.py
+  date: 2026-04-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase13s5a.csv
+  commit: a3c7c2d
+  notes: bin9-aware features (OOF proba + rule binary) - failed
+
+- phase: phase14
+  script: run_phase14_gru.py
+  date: 2026-04-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase14.csv
+  commit: 06ed352
+  notes: bidirectional GRU (25 timestep sequences) - failed
+
+- phase: phase15
+  script: run_phase15_fe.py
+  date: 2026-04-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase15.csv
+  commit: "[unknown]"
+  notes: 1000+ aggregation features (scenario/layout/hour/cross) -> top 200
+
+- phase: phase15b
+  script: run_phase15b.py
+  date: 2026-04-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase15b.csv
+  commit: b4a24c6
+  notes: TabNet retrained + 8-model ensemble + P13s1 reblend
+
+- phase: phase16
+  script: run_phase16_fe.py
+  date: 2026-04-XX
+  cv: 8.4403
+  public: 9.87947
+  rank: 5
+  submission: submission_phase16.csv
+  commit: 7fc6a5e
+  notes: 2nd-order FE (lag+rolling+cum+interaction) ~700 features, current best
+
+- phase: phase17
+  script: run_phase17_fe.py
+  date: 2026-04-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase17.csv
+  commit: 940b8f0
+  notes: explosion + layout hardness + position + CV^2 (bin9 attack)
+
+- phase: phase18
+  script: run_phase18_twostage.py
+  date: 2026-04-XX
+  cv: "[unknown]"
+  public: null
+  rank: null
+  submission: submission_phase18.csv
+  commit: 2fcb900
+  notes: Two-Stage Hurdle (GBDT normal + MLP extreme + isotonic) - failed
