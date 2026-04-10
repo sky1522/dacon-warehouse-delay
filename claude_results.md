@@ -683,3 +683,42 @@ Phase 16 lag/diff/rolling features 추가 전, scenario 내 row 순서가 실제
 - `output/submission_phase17.csv`
 - `output/feature_importance_phase17.png`
 - `output/phase17_feature_importance.csv`
+
+## Phase 18: Two-Stage Hurdle Model (run_phase18_twostage.py)
+
+### 핵심 아이디어
+- GBDT는 구조적으로 extrapolation 불가 (leaf 평균 예측 → train max 715인데 prediction max ~120)
+- Bin 9 MAE 40.92 = 전체 MAE의 48% — 피처 추가로는 절대 안 풀림
+- **Two-Stage Hurdle**: 정상 구간은 GBDT(강점), 극단 구간은 MLP(linear output, extrapolation 가능)
+
+### 구조
+1. **Stage 2A (Normal)**: Phase 16 GBDT ensemble OOF 재사용 (Nelder-Mead normalized weights)
+2. **Stage 1 (Classifier)**: LGBMClassifier로 "extreme 여부" OOF 분류 (threshold T=50/80/100 탐색)
+3. **Stage 2B (Extreme MLP)**: extreme samples만으로 학습한 소형 MLP (128-64-32, GELU, raw target MAE loss)
+   - fold-isolated StandardScaler, top 150 features
+   - linear output layer로 extrapolation 보존
+4. **Combine**: 3가지 방법 중 최적 선택
+   - Soft: (1-P) × normal + P × extreme
+   - Hard: P > cutoff ? extreme : normal
+   - Adjustment: normal + α × P × (extreme - normal)
+5. **Isotonic Calibration**: nested OOF isotonic regression (개선 시에만 적용)
+
+### Feature Engineering
+- Phase 17과 동일 (~726 features)
+- Phase 13s1 base 346 + Phase 15 agg 200 + Phase 16 2nd-order 150 + Phase 17 new 30
+
+### 결과 (실행 후 업데이트 필요)
+- Phase 16 reconstructed CV: ?.???? (expected ~8.4403)
+- Best threshold T: ?
+- Classifier AUC: ?.????
+- Extreme MLP extreme-only MAE: ?.?? (Phase 16: 40.92)
+- Best combine method: ? (CV ?.????)
+- Isotonic applied: ?
+- Phase 18 final CV: ?.???? (Phase 16 baseline: 8.4403)
+- Bin 9 MAE P18: ?.?? (Phase 16: 40.92)
+- Hard top5 MAE P18: ?.?? (Phase 16: 30.80)
+
+### 생성된 파일
+- `output/submission_phase18.csv`
+- `output/ckpt_phase18_extreme_mlp.pkl`
+- `output/phase18_feature_importance.csv`
