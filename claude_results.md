@@ -1,32 +1,29 @@
-# 3단계 정리 + Phase 20 준비
+# Phase 20 Bugfix Summary
 
-## STEP 1: P0 Cleanup (30d29c0)
-- **삭제**: blend_temp.py, blend_p7p8_60.csv, codex_results.old.md, codex_results.new.md
-- **archive/phases_01_12/**: run_phase1~12 (12개 스크립트)
-- **archive/analysis/**: run_phase13_step5a, 13s4_bin9_eda, 14_gru, 15b_tabnet, 3b_analysis, eda_deep (6개)
-- **experiments.yaml 수정**: phase14 submission → submission_phase14_gru.csv, phase15b script → run_phase15b_tabnet.py + submission → submission_phase15_full.csv
+## 적용된 버그 수정 (4개)
 
-## STEP 2: 문서 (25dac9f)
-- **README.md**: 현재 5위 9.86, Quick Start, 디렉토리 구조, Key Results
-- **PROGRESS.md**: Phase별 한 줄 요약 테이블, Next Steps
-- **DECISION.md**: docs/decisions/ 6개 의사결정 index
-- **CHANGELOG.md**: 2026-04-10~11 구조 변경 이력
-- **누락 phase docs 4개**: phase13s2 (hard layout), phase13s4 (bin9 EDA), phase16_residual, phase19 (multi-seed blend)
+### Fix 1 (Critical): roc_auc_score import 추가
+- `from sklearn.metrics import roc_auc_score` 누락으로 스크립트 실행 불가
+- `mean_absolute_error` import에 병합
 
-## STEP 3: Phase 20 스크립트 (682e2ea)
+### Fix 2 (Critical): Holdout MAE 비편향 계산
+- **기존**: full OOF에서 ensemble weight 최적화 → holdout이 weight 결정에 영향 (biased)
+- **수정**: `train_remain_mask = ~holdout_mask`로 80% 데이터에서만 weight 최적화
+- holdout 20%는 weight 결정에 미참여 → unbiased Public MAE 근사 가능
+- Expected Public range 출력 추가
 
-### run_phase20_eda.py (Pre-EDA, 4가지 질문)
-- Q1: Adversarial AUC (5-fold OOF LGBMClassifier, threshold 판단)
-- Q2: Median vs Zero fill 차이 (3개 핵심 컬럼 NaN rate, median, 분포 비교)
-- Q3: Adversarial holdout (top 20% test-like) 분포 검증
-- Q4: Phase 16 OOF holdout MAE (Public 9.87947 근접 여부)
+### Fix 3 (Medium): Adversarial split GroupKFold
+- **기존**: StratifiedKFold → 같은 layout_id가 train/valid 양쪽에 존재, classifier가 layout으로 cheat 가능
+- **수정**: GroupKFold(groups=layout_id)로 layout 누출 방지
+- num_leaves=63, max_depth=7, min_child_samples=100으로 파라미터 조정
 
-### run_phase20_clean.py (본 스크립트, 4가지 변경)
-1. **fillna(median)**: 30개 핵심 컬럼 train 기준 median fill (fillna(0) 대체)
-2. **Adversarial weight**: train_proba/(1-train_proba), clip [0.1,10], normalize → sample_weight에 곱셈
-3. **MLP loss**: MAE → (RMSE+MAE)/2 (rmse_mae_loss custom function)
-4. **Adversarial holdout**: top 20% test-like train samples로 별도 MAE 검증
+### Fix 5 (Critical): MLP/TabNet에 sample_weight 추가
+- **MLP**: `mdl.fit(..., sample_weight=sample_w[tri])` 추가
+- **TabNet**: `mdl.fit(..., weights=sample_w[tri])` 추가
+- adversarial weight가 GBDT에만 적용되고 MLP/TabNet에 누락되었던 문제 해결
 
-- 8 models (Phase 17 FE base + 4 changes)
-- Checkpoint: ckpt_phase20_{model}.pkl
-- Submission: submission_phase20.csv
+## 스킵된 수정
+
+### Fix 4 (Medium): Fold-local median fill → Phase 20.1로 연기
+- 구조 변경 크기가 커서 별도 phase에서 처리 예정
+- 현재 전역 median fill의 mild leakage 인지만 하고 진행

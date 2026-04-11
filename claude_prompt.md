@@ -1,93 +1,151 @@
-3단계 작업. 각 단계 완료 후 보고. 코드 실행 금지.
+run_phase20_clean.py 5개 버그 수정. 실행 금지.
 
-## STEP 1: 즉시 정리 (P0)
+## Fix 1 (Critical): roc_auc_score import
+```python
+# 상단 import 추가
+from sklearn.metrics import roc_auc_score
+```
 
-### 1.1 삭제
-- blend_temp.py
-- blend_p7p8_60.csv  
-- codex_results.old.md
-- codex_results.new.md
+## Fix 2 (Critical): Holdout MAE 비편향 계산
 
-### 1.2 archive/ 폴더 생성 + 이동
-mkdir archive/{phases_01_12,analysis,reviews}
+ensemble weight optimization을 train_remain 20% 제외한 80%에서 수행:
 
-archive/phases_01_12/ 로:
-- run_phase1.py ~ run_phase10.py
-- run_phase11.py, run_phase11b.py, run_phase12a.py
+```python
+# 기존: full OOF에서 weight 최적화
+# 수정: holdout 제외한 train_remain에서만 최적화
 
-archive/analysis/ 로:
-- run_phase13_step5a.py
-- run_phase13s4_bin9_eda.py
-- run_phase14_gru.py
-- run_phase15b_tabnet.py
-- run_phase3b_analysis.py
-- run_eda_deep.py
+train_remain_mask = ~holdout_mask
+def objective(w, oof_m, y, mask):
+    w = w / (w.sum() + 1e-12)
+    return np.abs((oof_m[mask] * w).sum(axis=1) - y[mask]).mean()
 
-### 1.3 메타데이터 수정
-experiments.yaml:
-- phase14: submission → submission_phase14_gru.csv
-- phase15b: script → run_phase15b_tabnet.py, submission → submission_phase15_full.csv
+x0 = np.ones(len(model_names)) / len(model_names)
+result = minimize(
+    objective, x0, 
+    args=(oof_matrix, y_train, train_remain_mask),
+    method='Nelder-Mead',
+    options={'xatol': 1e-6, 'fatol': 1e-6, 'maxiter': 3000}
+)
+best_weights = result.x / (result.x.sum() + 1e-12)
 
-### 1.4 필수 문서 생성
-- README.md (현재 5위 9.86, 빠른 시작, 디렉토리 구조)
-- PROGRESS.md (Phase별 한 줄 요약, 현재 → 다음)
-- DECISION.md (docs/decisions/ index 역할)
-- CHANGELOG.md (구조 변경 이력)
+# 이제 holdout은 weight 결정에 영향 없음, unbiased 검증 가능
+ensemble_oof = (oof_matrix * best_weights).sum(axis=1)
+train_remain_mae = np.abs(ensemble_oof[train_remain_mask] - y_train[train_remain_mask]).mean()
+holdout_mae = np.abs(ensemble_oof[holdout_mask] - y_train[holdout_mask]).mean()
 
-### 1.5 누락 phase 문서
-docs/phases/ 추가:
-- phase13s2.md (hard layout 분석)
-- phase13s4.md (bin9 EDA)
-- phase16_residual.md
-- phase19.md (multi-seed 실패 회고)
+print(f"Train remain MAE (weight optimized on this): {train_remain_mae:.4f}")
+print(f"Holdout MAE (UNBIASED, Public 근사):          {holdout_mae:.4f}")
+print(f"Phase 16 holdout baseline:                    9.7341")
+print(f"Expected Public range:                        [{holdout_mae*1.01:.4f}, {holdout_mae*1.02:.4f}]")
+```
 
-## STEP 2: Phase 20 Pre-EDA 스크립트 작성
+## Fix 3 (Medium): Adversarial split layout-aware
 
-run_phase20_eda.py 작성. 4가지 질문:
+```python
+# 기존: StratifiedKFold
+# 수정: GroupKFold by layout_id
 
-### Q1: Adversarial AUC
-train vs test 분류 가능도 측정
-- AUC > 0.7: shift 심각, adversarial weight 효과 클 것
-- AUC < 0.55: shift 없음, weight 불필요
+from sklearn.model_selection import GroupKFold
+import numpy as np
 
-### Q2: Median vs Zero Fill 차이
-order_inflow_15m, robot_active, battery_mean 3개 column:
-- NaN rate
-- median 값
-- fill(0) vs fill(median) 분포 차이
+# 50 shared layouts는 train/test 양쪽에 있음
+# → adversarial classifier가 layout_id로 cheat 가능
+# GroupKFold로 같은 layout이 train/valid 양쪽에 없도록
 
-### Q3: Adversarial Holdout 검증
-adv_proba top 20% 추출 후:
-- holdout 분포 vs test 분포 vs train_remain 분포 비교
-- 5개 핵심 column에서 mean gap 측정
+adv_groups = np.concatenate([
+    train_df['layout_id'].values,
+    test_df['layout_id'].values
+])
 
-### Q4: Phase 16 OOF의 holdout MAE
-phase16 ckpt 복원 후:
-- Full CV MAE
-- Train remain MAE  
-- Holdout MAE ← Public(9.87947)에 가까운지 확인
+cv_adv = GroupKFold(n_splits=5)
+adv_proba = np.zeros(len(adv_X), dtype='float32')
 
-## STEP 3: Phase 20 본 스크립트 작성 준비
+for fold_idx, (tr_idx, va_idx) in enumerate(cv_adv.split(adv_X, adv_y, groups=adv_groups)):
+    clf = lgb.LGBMClassifier(
+        n_estimators=300, learning_rate=0.05, num_leaves=63,
+        max_depth=7, min_child_samples=100,
+        verbosity=-1, random_state=42
+    )
+    clf.fit(adv_X.iloc[tr_idx], adv_y[tr_idx])
+    adv_proba[va_idx] = clf.predict_proba(adv_X.iloc[va_idx])[:, 1].astype('float32')
 
-run_phase20_clean.py 작성 (실행 금지):
+adv_auc = roc_auc_score(adv_y, adv_proba)
+print(f"Adversarial AUC (group-aware): {adv_auc:.4f}")
+print(f"  Note: may be lower than 0.989 due to group split")
+```
 
-### 변경 1: fillna(median)
-30개 핵심 컬럼 median fill, 나머지는 0
+## Fix 4 (Medium): Fold-local median fill
 
-### 변경 2: Adversarial Validation Sample Weight
-train_proba / (1 - train_proba), clip [0.1, 10], normalize
+fillna를 CV fold loop 안으로 이동. 각 fold의 train 80%에서만 median 계산:
 
-### 변경 3: MLP Loss = (RMSE + MAE) / 2
+```python
+# 기존: 전역 median fill
+# 수정: fold 내부에서 train fold의 median으로 fill
 
-### 변경 4: Adversarial Holdout (top 20% test-like)
-학습은 80%, 최종 검증은 holdout MAE
+# median fill 제거 → CV loop 안에서 처리
+MEDIAN_FILL_COLS = [...]  # 30개 컬럼
 
-## 규칙
-- 작성/이동/삭제만, 코드 실행 절대 금지
-- Drive에서 ckpt 복원이 필요하면 그 코드만 작성, 실행은 사용자가
-- 각 STEP 완료 후 변경사항 요약
-- 커밋 3개:
-  1. "chore: P0 cleanup (delete temp, archive old phases, fix experiments.yaml)"
-  2. "docs: README/PROGRESS/DECISION/CHANGELOG + missing phase docs"
-  3. "feat: Phase 20 pre-EDA + clean preprocessing draft"
+# 학습 루프 내부:
+for fold_idx, (tr_idx, va_idx) in enumerate(folds):
+    X_tr = X_train.iloc[tr_idx].copy()
+    X_va = X_train.iloc[va_idx].copy()
+    X_te = X_test.copy()
+    
+    # Fold-local median fill
+    for col in MEDIAN_FILL_COLS:
+        if col in X_tr.columns:
+            med = X_tr[col].median()
+            X_tr[col] = X_tr[col].fillna(med)
+            X_va[col] = X_va[col].fillna(med)
+            X_te[col] = X_te[col].fillna(med)
+    
+    # 나머지는 0
+    X_tr = X_tr.fillna(0)
+    X_va = X_va.fillna(0)
+    X_te = X_te.fillna(0)
+    
+    # ... 학습 진행
+```
+
+⚠️ 이건 구조가 크게 바뀜. **대안**: 간단하게 그대로 두고 "mild leakage" 인지만 하고 진행.
+   → Fix 4는 **Phase 20.1에서 하고 지금은 스킵** 권장.
+
+## Fix 5 (Critical): MLP/TabNet에 sample_weight 추가
+
+```python
+# MLP fit (line ~1103 근처)
+mlp.fit(
+    X_tr_scaled, y_tr_scaled,
+    validation_data=(X_va_scaled, y_va_scaled),
+    epochs=100,
+    batch_size=512,
+    sample_weight=final_weight[tr_idx],  # ← 추가!
+    callbacks=[...],
+    verbose=0,
+)
+
+# TabNet fit (line ~1126 근처)
+tabnet.fit(
+    X_tr_scaled, y_tr_scaled.reshape(-1, 1),
+    eval_set=[(X_va_scaled, y_va_scaled.reshape(-1, 1))],
+    weights=final_weight[tr_idx],  # ← 추가!
+    max_epochs=200,
+    patience=20,
+    batch_size=1024,
+)
+```
+
+⚠️ TabNet의 weights 파라미터는 라이브러리 버전에 따라 다름. 안 되면 skip.
+
+## 우선순위 적용
+
+- Fix 1: 반드시 (스크립트 실행 불가)
+- Fix 2: 반드시 (검증 신뢰성)
+- Fix 5: 반드시 (핵심 변경사항이 MLP에 적용 안 됨)
+- Fix 3: 권장 (AUC 재측정, 여전히 높으면 효과 확실)
+- Fix 4: 스킵 (Phase 20.1로 연기)
+
+## 작업 후
+- claude_results.md에 수정 내역 추가
+- 커밋: "fix: Phase 20 - 4 bugs (roc_auc import, unbiased holdout, group-aware adv, MLP sample_weight)"
 - 푸시

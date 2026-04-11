@@ -12,7 +12,7 @@ import xgboost as xgb
 from catboost import CatBoostRegressor, Pool
 from sklearn.model_selection import StratifiedGroupKFold, GroupKFold
 from sklearn.preprocessing import StandardScaler, RobustScaler
-from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_absolute_error, roc_auc_score
 from scipy.optimize import minimize
 from matplotlib.patches import Patch
 import warnings
@@ -918,23 +918,25 @@ print(f"Features: {len(feature_cols)}, ID verified", flush=True)
 adv_X = pd.concat([X, X_test], axis=0, ignore_index=True)
 adv_y = np.concatenate([np.zeros(len(X)), np.ones(len(X_test))])
 
-from sklearn.model_selection import StratifiedKFold
-adv_clf = lgb.LGBMClassifier(
-    n_estimators=300, learning_rate=0.05, num_leaves=31, max_depth=6,
-    min_child_samples=50, feature_fraction=0.7, bagging_fraction=0.8,
-    bagging_freq=5, verbosity=-1, random_state=42,
-)
-adv_skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-adv_oof = np.zeros(len(adv_y))
-for fold_idx, (tr_idx, va_idx) in enumerate(adv_skf.split(adv_X, adv_y)):
-    adv_clf.fit(adv_X.iloc[tr_idx], adv_y[tr_idx],
-                eval_set=[(adv_X.iloc[va_idx], adv_y[va_idx])],
-                callbacks=[lgb.early_stopping(30, verbose=False), lgb.log_evaluation(0)])
-    adv_oof[va_idx] = adv_clf.predict_proba(adv_X.iloc[va_idx])[:, 1]
+adv_groups = np.concatenate([
+    train_fe['layout_id'].values,
+    test_fe['layout_id'].values
+])
+adv_cv = GroupKFold(n_splits=5)
+adv_oof = np.zeros(len(adv_y), dtype='float32')
+for fold_idx, (tr_idx, va_idx) in enumerate(adv_cv.split(adv_X, adv_y, groups=adv_groups)):
+    adv_clf = lgb.LGBMClassifier(
+        n_estimators=300, learning_rate=0.05, num_leaves=63,
+        max_depth=7, min_child_samples=100,
+        verbosity=-1, random_state=42
+    )
+    adv_clf.fit(adv_X.iloc[tr_idx], adv_y[tr_idx])
+    adv_oof[va_idx] = adv_clf.predict_proba(adv_X.iloc[va_idx])[:, 1].astype('float32')
 
 train_adv_proba = adv_oof[:len(X)]
 adv_auc = roc_auc_score(adv_y, adv_oof)
-print(f"  Adversarial AUC: {adv_auc:.4f}", flush=True)
+print(f"  Adversarial AUC (group-aware): {adv_auc:.4f}", flush=True)
+print(f"  Note: may be lower than 0.989 due to group split", flush=True)
 
 # Sample weight: proba / (1 - proba), clip [0.1, 10], normalize
 adv_weight = np.clip(train_adv_proba / (1 - train_adv_proba + 1e-6), 0.1, 10).astype('float32')
@@ -1100,7 +1102,7 @@ else:
         Xva = np.clip(fold_scaler.transform(X_train_nn_raw[vai]), -5, 5).astype('float32')
         Xte = np.clip(fold_scaler.transform(X_test_nn_raw), -5, 5).astype('float32')
         mdl = build_mlp(Xtr.shape[1])
-        mdl.fit(Xtr, y_log_nn[tri], validation_data=(Xva, y_log_nn[vai]), epochs=100, batch_size=512, callbacks=[keras_callbacks.EarlyStopping('val_loss', patience=10, restore_best_weights=True, verbose=0), keras_callbacks.ReduceLROnPlateau('val_loss', factor=0.5, patience=5, min_lr=1e-5, verbose=0)], verbose=0)
+        mdl.fit(Xtr, y_log_nn[tri], validation_data=(Xva, y_log_nn[vai]), epochs=100, batch_size=512, sample_weight=sample_w[tri], callbacks=[keras_callbacks.EarlyStopping('val_loss', patience=10, restore_best_weights=True, verbose=0), keras_callbacks.ReduceLROnPlateau('val_loss', factor=0.5, patience=5, min_lr=1e-5, verbose=0)], verbose=0)
         p = np.clip(np.expm1(mdl.predict(Xva, verbose=0).flatten()), 0, None).astype(np.float32); o[vai] = p
         t += np.clip(np.expm1(mdl.predict(Xte, verbose=0).flatten()), 0, None).astype(np.float32) / 5
         print(f"    F{fi+1} MAE: {mean_absolute_error(y.values[vai], p):.4f}", flush=True)
@@ -1123,7 +1125,7 @@ try:
             Xva = np.clip(np.nan_to_num(rs.transform(X.iloc[vai]), nan=0.0, posinf=5.0, neginf=-5.0), -5, 5).astype('float32')
             Xte = np.clip(np.nan_to_num(rs.transform(X_test), nan=0.0, posinf=5.0, neginf=-5.0), -5, 5).astype('float32')
             mdl = TabNetRegressor(n_d=32, n_a=32, n_steps=3, gamma=1.3, lambda_sparse=1e-3, optimizer_fn=torch.optim.Adam, optimizer_params=dict(lr=2e-2), scheduler_params={"step_size": 10, "gamma": 0.9}, scheduler_fn=torch.optim.lr_scheduler.StepLR, mask_type='entmax', seed=42, verbose=10, device_name='cuda')
-            mdl.fit(X_train=Xtr, y_train=y.values[tri].reshape(-1, 1).astype('float32'), eval_set=[(Xva, y.values[vai].reshape(-1, 1).astype('float32'))], eval_metric=['mae'], max_epochs=50, patience=15, batch_size=2048, virtual_batch_size=256, num_workers=0, drop_last=False)
+            mdl.fit(X_train=Xtr, y_train=y.values[tri].reshape(-1, 1).astype('float32'), eval_set=[(Xva, y.values[vai].reshape(-1, 1).astype('float32'))], eval_metric=['mae'], max_epochs=50, patience=15, batch_size=2048, virtual_batch_size=256, num_workers=0, drop_last=False, weights=sample_w[tri])
             p = np.clip(mdl.predict(Xva).flatten(), 0, None).astype(np.float32); o[vai] = p
             t += np.clip(mdl.predict(Xte).flatten(), 0, None).astype(np.float32) / 5
             print(f"    F{fi+1} MAE: {mean_absolute_error(y.values[vai], p):.4f}", flush=True)
@@ -1148,33 +1150,37 @@ for n in model_names_available:
 oof_matrix = np.column_stack([oof_preds[n] for n in model_names_available])
 test_matrix = np.column_stack([test_preds[n] for n in model_names_available])
 
-def objective(w, oof_m, yt):
+train_remain_mask = ~holdout_mask
+
+def objective(w, oof_m, yt, mask):
     w = w / (w.sum() + 1e-12)
-    return np.abs((oof_m * w).sum(axis=1) - yt).mean()
+    return np.abs((oof_m[mask] * w).sum(axis=1) - yt[mask]).mean()
 
 x0 = np.ones(len(model_names_available)) / len(model_names_available)
-result = minimize(objective, x0, args=(oof_matrix, y.values),
+result = minimize(objective, x0, args=(oof_matrix, y.values, train_remain_mask),
                   method='Nelder-Mead', options={'xatol': 1e-6, 'fatol': 1e-6, 'maxiter': 3000})
 best_weights = result.x / (result.x.sum() + 1e-12)
-ensemble_cv = np.abs((oof_matrix * best_weights).sum(axis=1) - y.values).mean()
 
-print(f"\n  Phase 20 Ensemble CV: {ensemble_cv:.4f}", flush=True)
-print(f"  Phase 16 baseline:   8.4403", flush=True)
-print(f"  Improvement:         {8.4403 - ensemble_cv:+.4f}", flush=True)
+ensemble_oof = (oof_matrix * best_weights).sum(axis=1)
+ensemble_cv = np.abs(ensemble_oof - y.values).mean()
+train_remain_mae = np.abs(ensemble_oof[train_remain_mask] - y.values[train_remain_mask]).mean()
+holdout_mae = np.abs(ensemble_oof[holdout_mask] - y.values[holdout_mask]).mean()
+
+print(f"\n  Phase 20 Ensemble CV (full): {ensemble_cv:.4f}", flush=True)
+print(f"  Phase 16 baseline:           8.4403", flush=True)
+print(f"  Improvement:                 {8.4403 - ensemble_cv:+.4f}", flush=True)
 
 print(f"\n  Weights (sum={best_weights.sum():.4f}):", flush=True)
 for n, w in zip(model_names_available, best_weights):
     print(f"    {n}: {w:.4f}", flush=True)
 
-# Phase 20 Change 4: Holdout MAE
-final_oof = (oof_matrix * best_weights).sum(axis=1)
-holdout_mae = np.abs(final_oof[holdout_mask] - y.values[holdout_mask]).mean()
-remain_mae = np.abs(final_oof[~holdout_mask] - y.values[~holdout_mask]).mean()
-print(f"\n  Holdout MAE (test-like 20%): {holdout_mae:.4f}", flush=True)
-print(f"  Remain MAE (train-like 80%): {remain_mae:.4f}", flush=True)
-print(f"  Public MAE (Phase 16):       9.87947", flush=True)
+print(f"\n  Train remain MAE (weight optimized on this): {train_remain_mae:.4f}", flush=True)
+print(f"  Holdout MAE (UNBIASED, Public 근사):          {holdout_mae:.4f}", flush=True)
+print(f"  Phase 16 holdout baseline:                    9.7341", flush=True)
+print(f"  Expected Public range:                        [{holdout_mae*1.01:.4f}, {holdout_mae*1.02:.4f}]", flush=True)
 
 # Submission
+final_oof = ensemble_oof
 test_pred = np.clip((test_matrix * best_weights).sum(axis=1), 0, 500)
 sub = sample_sub.copy()
 sub['avg_delay_minutes_next_30m'] = test_pred.astype('float32')
@@ -1188,8 +1194,8 @@ print(sub['avg_delay_minutes_next_30m'].describe(), flush=True)
 print("\n" + "=" * 60, flush=True)
 print("=== Phase 20 Results ===", flush=True)
 print("=" * 60, flush=True)
-print(f"Changes: fillna(median), adversarial weight (AUC {adv_auc:.4f}), MLP (RMSE+MAE)/2", flush=True)
+print(f"Changes: fillna(median), adversarial weight (AUC {adv_auc:.4f}), MLP (RMSE+MAE)/2, 4 bugfixes", flush=True)
 print(f"Ensemble CV: {ensemble_cv:.4f} (Phase 16: 8.4403)", flush=True)
-print(f"Holdout MAE: {holdout_mae:.4f}", flush=True)
+print(f"Holdout MAE (UNBIASED): {holdout_mae:.4f}", flush=True)
 
 print("\n=== Phase 20 Complete ===", flush=True)
