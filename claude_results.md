@@ -1,29 +1,17 @@
-# Phase 20 Bugfix Summary
+# Phase 21A: fillna(median) 단독 효과 측정
 
-## 적용된 버그 수정 (4개)
+## 목적
+- Phase 20에서 도입한 4가지 변경 중 fillna(median)만 분리 테스트
+- Phase 16 코드 그대로 + NaN cleanup만 median fill로 변경
+- adversarial weight 없음, MLP loss 그대로 (mae), holdout 분석 없음
 
-### Fix 1 (Critical): roc_auc_score import 추가
-- `from sklearn.metrics import roc_auc_score` 누락으로 스크립트 실행 불가
-- `mean_absolute_error` import에 병합
+## 변경 사항
+- `run_phase16_fe.py` 복사 → `run_phase21a_median_test.py`
+- 데이터 로딩 직후 33개 핵심 컬럼에 train median fill 추가
+- 나머지 코드 Phase 16과 100% 동일 (8모델 + ensemble)
+- 체크포인트: `ckpt_phase21a_{model}.pkl`
+- 제출: `submission_phase21a.csv`
 
-### Fix 2 (Critical): Holdout MAE 비편향 계산
-- **기존**: full OOF에서 ensemble weight 최적화 → holdout이 weight 결정에 영향 (biased)
-- **수정**: `train_remain_mask = ~holdout_mask`로 80% 데이터에서만 weight 최적화
-- holdout 20%는 weight 결정에 미참여 → unbiased Public MAE 근사 가능
-- Expected Public range 출력 추가
-
-### Fix 3 (Medium): Adversarial split GroupKFold
-- **기존**: StratifiedKFold → 같은 layout_id가 train/valid 양쪽에 존재, classifier가 layout으로 cheat 가능
-- **수정**: GroupKFold(groups=layout_id)로 layout 누출 방지
-- num_leaves=63, max_depth=7, min_child_samples=100으로 파라미터 조정
-
-### Fix 5 (Critical): MLP/TabNet에 sample_weight 추가
-- **MLP**: `mdl.fit(..., sample_weight=sample_w[tri])` 추가
-- **TabNet**: `mdl.fit(..., weights=sample_w[tri])` 추가
-- adversarial weight가 GBDT에만 적용되고 MLP/TabNet에 누락되었던 문제 해결
-
-## 스킵된 수정
-
-### Fix 4 (Medium): Fold-local median fill → Phase 20.1로 연기
-- 구조 변경 크기가 커서 별도 phase에서 처리 예정
-- 현재 전역 median fill의 mild leakage 인지만 하고 진행
+## 판단 기준
+- CV < 8.4403 → fillna(median) 효과 있음
+- CV >= 8.4403 → 트리 모델은 NaN native 처리, 효과 없음
