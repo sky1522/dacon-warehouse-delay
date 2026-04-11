@@ -1,18 +1,17 @@
-# Phase 21B: Adversarial Weight 단독 효과 측정
+# Phase 21C: MLP RMSE+MAE Loss 단독 효과 측정
 
 ## 목적
-- Phase 20에서 도입한 4가지 변경 중 adversarial weight만 분리 테스트
-- Phase 16 코드 그대로 + adversarial weight만 추가
-- fillna는 Phase 16 그대로 (fillna(0)), MLP loss도 그대로 (mae)
+- Phase 20에서 도입한 MLP loss 변경만 분리 테스트
+- Phase 16 코드 그대로 + MLP loss만 mae → (RMSE+MAE)/2로 변경
 
 ## 변경 사항
-- `run_phase16_fe.py` 복사 → `run_phase21b_adv_test.py`
-- Adversarial validation: GroupKFold(layout_id), LGBMClassifier
-- Weight: proba/(1-proba), clip [0.5, 2.0] (Phase 20의 [0.1, 10]보다 보수적)
-- sample_weight = base_weight * adv_weight (8모델 전부 적용, MLP/TabNet 포함)
-- 체크포인트: `ckpt_phase21b_{model}.pkl`
-- 제출: `submission_phase21b.csv`
+- `run_phase16_fe.py` 복사 → `run_phase21c_mlploss_test.py`
+- MLP compile: `loss='mae'` → `loss=rmse_mae_loss`
+- 트리 모델 7개, TabNet, CV 전략 등 모두 Phase 16과 100% 동일
+- 체크포인트: `ckpt_phase21c_{model}.pkl`
+- 제출: `submission_phase21c.csv`
 
 ## 판단 기준
-- CV < 8.4403 → adversarial weight 효과 있음
-- CV >= 8.4403 → adversarial weight 무효, Phase 16이 best
+- MLP CV < 8.5887 → loss 변경이 MLP 자체 성능 개선
+- Ensemble CV < 8.4403 → 앙상블에도 기여
+- 트리 모델 CV는 변화 없어야 함 (변경 없으므로)
