@@ -1,17 +1,16 @@
-# Phase 21C: MLP RMSE+MAE Loss 단독 효과 측정
+# Phase 22 Pre-EDA: Cascading + Layout Cluster Validation
 
-## 목적
-- Phase 20에서 도입한 MLP loss 변경만 분리 테스트
-- Phase 16 코드 그대로 + MLP loss만 mae → (RMSE+MAE)/2로 변경
+## 스크립트
+- `run_phase22_eda.py` (Kaggle 30분 내 실행 가능)
 
-## 변경 사항
-- `run_phase16_fe.py` 복사 → `run_phase21c_mlploss_test.py`
-- MLP compile: `loss='mae'` → `loss=rmse_mae_loss`
-- 트리 모델 7개, TabNet, CV 전략 등 모두 Phase 16과 100% 동일
-- 체크포인트: `ckpt_phase21c_{model}.pkl`
-- 제출: `submission_phase21c.csv`
+## 4가지 검증
+1. **Q1: Cascading Detector** - rho utilization, binary indicators, multi_pressure, rho velocity → target correlation
+2. **Q2: Layout Clustering** - K-means 10 cluster, train/test 분포 비교, cluster별 target/MAE
+3. **Q3: rho-band x Position** - position별 rho/target 분포, cascading 발생 시점
+4. **Q4: Bin 9 특성** - target>100 sample의 rho/pressure 특성
 
-## 판단 기준
-- MLP CV < 8.5887 → loss 변경이 MLP 자체 성능 개선
-- Ensemble CV < 8.4403 → 앙상블에도 기여
-- 트리 모델 CV는 변화 없어야 함 (변경 없으므로)
+## 출력 파일
+- `output/phase22_eda/cascading_correlations.csv`
+- `output/phase22_eda/layout_clusters.csv`
+- `output/phase22_eda/cluster_mae.csv`
+- `output/phase22_eda/bin9_characteristics.csv`
