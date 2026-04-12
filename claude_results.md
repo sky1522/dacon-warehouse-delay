@@ -1,15 +1,22 @@
-# Phase 23 Track A: Codex 리뷰 반영 3개 수정
+# Phase 23 Track A v2: Layout-aware, Scenario-agnostic
 
-## Fix 1 (HIGH): layout_type target encoding ValueError
-- layout_type = 4 unique → GroupKFold(5) 불가
-- KFold(shuffle=True)로 변경
+## v1 실패 교훈
+- Scenario aggregate → train/test 분포 차이로 Public 10.28 (baseline 9.86 대비 악화)
+- Test layout 50/100 unseen → scenario aggregate 무의미
+- GroupKFold CV 8.79 → Public 10.28 (gap 1.49)
 
-## Fix 2 (MEDIUM): layout_id target encoding 설계 결함 제거
-- GroupKFold(groups=layout_id)로 split 시 val layout이 train에 없음
-- train OOF가 모두 global_mean (상수) → test와 불일치
-- layout_id target encoding 완전 제거 (layout 구조 변수 13개로 충분)
+## v2 설계 원칙
+1. Scenario aggregate 완전 제거
+2. Row-level features + Layout-aware features만
+3. Unseen layout 대응 (구조 변수 x 운영 변수 interaction)
 
-## Fix 3 (LOW): Feature selection 3-fold 평균으로 개선
-- 기존: single fold importance
-- 수정: 3-fold GroupKFold 평균 importance
-- 제거 기준: ALL folds에서 zero OR bottom 5% 평균 importance
+## 9-Step Pipeline
+1. **Saturation**: pack/robot/dock margin, cascading trigger, inflow pressure (~13)
+2. **Queueing W**: rho/(1-rho), Little's Law, bottleneck (~7)
+3. **Layout Capacity**: density, congestion potential, oneway penalty (~7)
+4. **Layout x Operation Interaction**: aisle x traffic, intersection x congestion, charger demand (~12)
+5. **Within-Layout Percentile**: 11 key cols rank(pct=True) by layout_id (train+test unsupervised)
+6. **Layout Type**: one-hot + KFold target encoding
+7. **Feature Selection**: 3-fold GroupKFold importance, zero ALL folds + bottom 5% removal
+8. **5-Fold CV**: LGB Huber 5000 trees, GroupKFold by layout_id (GPU + CPU fallback)
+9. **Save**: submission, OOF, checkpoint
