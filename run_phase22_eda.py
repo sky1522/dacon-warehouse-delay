@@ -18,7 +18,20 @@ print("=" * 60, flush=True)
 
 train = pd.read_csv('data/train.csv')
 test = pd.read_csv('data/test.csv')
+layout_info = pd.read_csv('data/layout_info.csv')
 print(f"Train: {len(train)}, Test: {len(test)}", flush=True)
+print(f"Train cols: {train.columns.tolist()[:10]}...", flush=True)
+print(f"Layout cols: {layout_info.columns.tolist()}", flush=True)
+
+# Merge layout features
+train = train.merge(layout_info, on='layout_id', how='left')
+test = test.merge(layout_info, on='layout_id', how='left')
+print(f"After merge: train shape {train.shape}, test shape {test.shape}", flush=True)
+
+# Position 생성 (scenario_id 내 순서)
+train = train.sort_values(['scenario_id'])
+train['position_in_scenario'] = train.groupby('scenario_id').cumcount()
+test['position_in_scenario'] = test.groupby('scenario_id').cumcount()
 
 # ##############################################################
 # Q1: Cascading Detector Validation
@@ -44,10 +57,10 @@ train['multi_pressure'] = train['robot_pressure'] + train['pack_pressure'] + tra
 
 # 4. rho velocity (scenario 내 변화율)
 train = train.sort_values(['scenario_id', 'position_in_scenario'])
-train['rho_diff'] = train.groupby('scenario_id')['rho_max'].diff()
+train['rho_diff'] = train.groupby('scenario_id')['rho_max'].diff().fillna(0)
 train['rho_velocity_3'] = train.groupby('scenario_id')['rho_max'].rolling(3).apply(
     lambda x: x.iloc[-1] - x.iloc[0] if len(x) == 3 else 0
-).reset_index(level=0, drop=True)
+).reset_index(level=0, drop=True).fillna(0)
 
 # 5. Target correlation
 target = train['avg_delay_minutes_next_30m']
@@ -76,43 +89,41 @@ layout_features = ['aisle_width_avg', 'robot_total', 'intersection_count',
                     'layout_compactness', 'pack_station_count', 'charger_count',
                     'one_way_ratio', 'floor_area_sqm', 'zone_dispersion']
 
-# train + test layout 합치기
-all_layouts_train = train.groupby('layout_id')[layout_features].first()
-all_layouts_test = test.groupby('layout_id')[layout_features].first()
-all_layouts = pd.concat([all_layouts_train, all_layouts_test]).drop_duplicates()
-print(f"Total unique layouts: {len(all_layouts)}", flush=True)
-
-# K-means 10 clusters
+# layout_info에서 직접 KMeans
+X_layouts = layout_info[layout_features].fillna(0).values
 scaler = StandardScaler()
-X_layouts = scaler.fit_transform(all_layouts)
+X_scaled = scaler.fit_transform(X_layouts)
 km = KMeans(n_clusters=10, random_state=42, n_init=10)
-all_layouts['cluster'] = km.fit_predict(X_layouts)
+layout_info['cluster'] = km.fit_predict(X_scaled)
+print(f"Total unique layouts: {len(layout_info)}", flush=True)
 
 # Train/Test layout cluster 분포
-train_layout_cluster = all_layouts.loc[all_layouts_train.index, 'cluster']
-test_layout_cluster = all_layouts.loc[all_layouts_test.index, 'cluster']
+train_layout_ids = train['layout_id'].unique()
+test_layout_ids = test['layout_id'].unique()
+train_clusters = layout_info[layout_info['layout_id'].isin(train_layout_ids)].set_index('layout_id')['cluster']
+test_clusters = layout_info[layout_info['layout_id'].isin(test_layout_ids)].set_index('layout_id')['cluster']
 
 print("\nCluster 분포:", flush=True)
-print(f"  Train layouts ({len(all_layouts_train)}): {train_layout_cluster.value_counts().sort_index().tolist()}", flush=True)
-print(f"  Test layouts ({len(all_layouts_test)}):  {test_layout_cluster.value_counts().sort_index().tolist()}", flush=True)
+print(f"  Train layouts ({len(train_layout_ids)}): {train_clusters.value_counts().sort_index().to_dict()}", flush=True)
+print(f"  Test layouts ({len(test_layout_ids)}):  {test_clusters.value_counts().sort_index().to_dict()}", flush=True)
 
 # Test/Train ratio per cluster
 combined_cluster = pd.DataFrame({
-    'train': train_layout_cluster.value_counts().sort_index(),
-    'test': test_layout_cluster.value_counts().sort_index()
+    'train': train_clusters.value_counts().sort_index(),
+    'test': test_clusters.value_counts().sort_index()
 }).fillna(0)
 combined_cluster['test_train_ratio'] = combined_cluster['test'] / (combined_cluster['train'] + 1)
 print("\nTest/Train ratio per cluster:", flush=True)
 print(combined_cluster.sort_values('test_train_ratio', ascending=False), flush=True)
 
 # Cluster별 target 분포
-train['layout_cluster'] = train['layout_id'].map(train_layout_cluster)
+train['layout_cluster'] = train['layout_id'].map(train_clusters)
 print("\n=== Cluster별 Target 통계 ===", flush=True)
 cluster_target = train.groupby('layout_cluster')['avg_delay_minutes_next_30m'].agg(['count', 'mean', 'median', 'std'])
 print(cluster_target, flush=True)
 
 # Save layout clusters
-all_layouts.to_csv('output/phase22_eda/layout_clusters.csv')
+layout_info.to_csv('output/phase22_eda/layout_clusters.csv', index=False)
 
 # Phase 16 OOF MAE per cluster
 if os.path.exists('output/ckpt_phase16_lgb_huber.pkl'):
@@ -155,23 +166,26 @@ bin9 = train[train['avg_delay_minutes_next_30m'] > 100]
 non_bin9 = train[train['avg_delay_minutes_next_30m'] <= 100]
 print(f"Bin 9: {len(bin9)} samples ({len(bin9)/len(train)*100:.1f}%)", flush=True)
 
-print("\nBin 9 평균 vs 일반 평균:", flush=True)
 bin9_chars = []
-for f in ['rho_max', 'multi_pressure', 'rho_velocity_3', 'order_inflow_15m',
-          'robot_active', 'charge_queue_length', 'congestion_score']:
-    if f in train.columns:
-        b9 = bin9[f].mean()
-        nb = non_bin9[f].mean()
-        ratio = b9 / nb if nb != 0 else float('inf')
-        print(f"  {f}: Bin9={b9:.2f}, Non-Bin9={nb:.2f}, ratio={ratio:.2f}x", flush=True)
-        bin9_chars.append({'feature': f, 'bin9_mean': b9, 'non_bin9_mean': nb, 'ratio': ratio})
+if len(bin9) == 0:
+    print("  Bin 9 sample 없음, skip", flush=True)
+else:
+    print("\nBin 9 평균 vs 일반 평균:", flush=True)
+    for f in ['rho_max', 'multi_pressure', 'rho_velocity_3', 'order_inflow_15m',
+              'robot_active', 'charge_queue_length', 'congestion_score']:
+        if f in train.columns:
+            b9 = bin9[f].mean()
+            nb = non_bin9[f].mean()
+            ratio = b9 / nb if nb != 0 else float('inf')
+            print(f"  {f}: Bin9={b9:.2f}, Non-Bin9={nb:.2f}, ratio={ratio:.2f}x", flush=True)
+            bin9_chars.append({'feature': f, 'bin9_mean': b9, 'non_bin9_mean': nb, 'ratio': ratio})
+
+    # Bin 9 발생 layout과 position
+    print(f"\nBin 9 발생 layout 수: {bin9['layout_id'].nunique()} / {train['layout_id'].nunique()}", flush=True)
+    print(f"Bin 9 발생 position 분포:", flush=True)
+    print(bin9['position_in_scenario'].value_counts().sort_index(), flush=True)
 
 pd.DataFrame(bin9_chars).to_csv('output/phase22_eda/bin9_characteristics.csv', index=False)
-
-# Bin 9 발생 layout과 position
-print(f"\nBin 9 발생 layout 수: {bin9['layout_id'].nunique()} / {train['layout_id'].nunique()}", flush=True)
-print(f"Bin 9 발생 position 분포:", flush=True)
-print(bin9['position_in_scenario'].value_counts().sort_index(), flush=True)
 
 # ##############################################################
 # Summary
@@ -200,7 +214,10 @@ all_mean = train['avg_delay_minutes_next_30m'].mean()
 print(f"\n4. rho > 0.85 target mean / all mean: {high_rho_mean:.2f} / {all_mean:.2f} = {high_rho_mean/all_mean:.2f}x", flush=True)
 
 # 5. Bin 9 multi_pressure
-bin9_mp = bin9['multi_pressure'].mean()
-print(f"\n5. Bin 9 multi_pressure mean: {bin9_mp:.2f}", flush=True)
+if len(bin9) > 0:
+    bin9_mp = bin9['multi_pressure'].mean()
+    print(f"\n5. Bin 9 multi_pressure mean: {bin9_mp:.2f}", flush=True)
+else:
+    print(f"\n5. Bin 9 multi_pressure mean: N/A (no samples)", flush=True)
 
 print("\n=== Phase 22 EDA Complete ===", flush=True)
