@@ -1,562 +1,137 @@
-Phase 23 Track A: AMEX 2위 스타일 feature engineering + 기존 feature selection.
-EDA 결과 반영: INDEPENDENT_SNAPSHOTS + STRONG aggregate + Moderate shift.
-Sequence/deviation feature 추가 금지. Scenario aggregate 대거 추가.
+run_phase23_track_a.py 수정. Codex가 3개 이슈 지적:
 
-파일: run_phase23_track_a.py
-작성만, 실행 금지.
-Kaggle T4 GPU 2시간 내 실행 가능.
+## Fix 1 (HIGH): Step 6 layout_type target encoding 실패
+- layout_type = 4 unique values
+- 현재 GroupKFold(5) 시도 → ValueError
+- 해결: KFold (group 제약 없음)로 변경
 
-## 배경 (반드시 읽고 작성)
-Day 1 EDA 결과:
-- Target lag-1 autocorr 0.29, monotonic shift_hour 0% → 시계열 아님
-- Scenario aggregate improvement 0.21 (기준 0.05의 4배) → 핵심 무기
-- Deviation corr ~0 → 만들지 말 것
-- Bin 9 원인: pack_utilization/robot_active 포화 (4개 자원)
-- Adversarial AUC 0.66 → 중간 수준, top features는 layout 구조 변수
+## Fix 2 (MEDIUM): layout_id target encoding 설계 결함
+- GroupKFold(groups=layout_id)로 split하면
+  각 val fold의 layout이 train fold에 없음
+- → train OOF가 모두 global_mean (상수)
+- → test는 full-train encoding
+- → train/test feature 불일치
+- 해결: layout_id target encoding 완전 제거
+  (layout 구조 변수 13개가 이미 feature에 있음)
 
-## 전체 구조
+## Fix 3 (LOW): Feature selection 개선
+- 현재 single fold importance 기준
+- 해결: 3-fold 평균 + "모든 fold에서 zero"인 feature 식별
+- 제거 기준: zero across ALL folds OR bottom 5% 평균 importance
 
+## 수정 코드
+
+### Step 6 수정
 ```python
-import pandas as pd
-import numpy as np
-import pickle
-import os
-import gc
-from pathlib import Path
-import lightgbm as lgb
-from sklearn.model_selection import GroupKFold
-from sklearn.metrics import mean_absolute_error
-
-os.makedirs('output', exist_ok=True)
-
-print("="*70)
-print("Phase 23 Track A: AMEX-style Aggregate Features + Feature Selection")
-print("="*70)
-
-# Data loading
-train = pd.read_csv('data/train.csv')
-test = pd.read_csv('data/test.csv')
-layout = pd.read_csv('data/layout_info.csv')
-
-# Merge layout
-train = train.merge(layout, on='layout_id', how='left')
-test = test.merge(layout, on='layout_id', how='left')
-
-TARGET = 'avg_delay_minutes_next_30m'
-print(f"Train: {train.shape}, Test: {test.shape}")
-```
-
-## Step 1: 핵심 변수 정의
-
-```python
-# Numerical operation columns (scenario 내 변동하는 것)
-OPERATION_COLS = [
-    'order_inflow_15m', 'unique_sku_15m', 'avg_items_per_order',
-    'urgent_order_ratio', 'heavy_item_ratio', 'cold_chain_ratio',
-    'sku_concentration', 'robot_active', 'robot_idle', 'robot_charging',
-    'robot_utilization', 'avg_trip_distance', 'task_reassign_15m',
-    'battery_mean', 'battery_std', 'low_battery_ratio',
-    'charge_queue_length', 'avg_charge_wait', 'congestion_score',
-    'max_zone_density', 'blocked_path_15m', 'near_collision_15m',
-    'fault_count_15m', 'avg_recovery_time', 'replenishment_overlap',
-    'pack_utilization', 'manual_override_ratio', 'loading_dock_util',
-    'staff_on_floor', 'forklift_active_count', 'conveyor_speed_mps',
-    'prev_shift_volume', 'order_wave_count', 'pick_list_length_avg',
-    'express_lane_util', 'bulk_order_ratio', 'staging_area_util',
-    'warehouse_temp_avg', 'humidity_pct', 'external_temp_c',
-    'wind_speed_kmh', 'precipitation_mm', 'lighting_level_lux',
-    'ambient_noise_db', 'co2_level_ppm', 'hvac_power_kw',
-    'wms_response_time_ms', 'scanner_error_rate', 'network_latency_ms',
-    'label_print_queue', 'outbound_truck_wait_min', 'backorder_ratio',
-    'shift_handover_delay_min'
-]
-
-# Layout constant columns (scenario 내 불변)
-LAYOUT_COLS = [
-    'aisle_width_avg', 'intersection_count', 'one_way_ratio',
-    'pack_station_count', 'charger_count', 'layout_compactness',
-    'zone_dispersion', 'robot_total', 'building_age_years',
-    'floor_area_sqm', 'ceiling_height_m', 'fire_sprinkler_count',
-    'emergency_exit_count'
-]
-
-# Categorical
-CAT_COLS = ['layout_type']
-
-# Filter to existing columns
-OPERATION_COLS = [c for c in OPERATION_COLS if c in train.columns]
-LAYOUT_COLS = [c for c in LAYOUT_COLS if c in train.columns]
-
-print(f"Operation cols: {len(OPERATION_COLS)}")
-print(f"Layout cols: {len(LAYOUT_COLS)}")
-```
-
-## Step 2: Scenario-level Aggregate Features (AMEX 2위 스타일)
-
-**EDA 결과 기반: scn_mean, scn_std, scn_max, scn_p90, scn_min 모두 포함**
-
-```python
-print("\n" + "="*70)
-print("Step 2: Scenario Aggregate Features")
-print("="*70)
-
-def create_scenario_aggregates(df, cols):
-    """
-    AMEX 2위 스타일 aggregate.
-    각 scenario의 통계를 모든 row에 broadcast.
-    """
-    agg_funcs = ['mean', 'std', 'min', 'max', 'median']
-    aggs = df.groupby('scenario_id')[cols].agg(agg_funcs)
-    
-    # Flatten multi-index columns
-    aggs.columns = [f'{col}_scn_{func}' for col, func in aggs.columns]
-    
-    # P90, P10 (별도 계산 - agg에서 lambda는 느림)
-    p90 = df.groupby('scenario_id')[cols].quantile(0.9)
-    p90.columns = [f'{col}_scn_p90' for col in p90.columns]
-    p10 = df.groupby('scenario_id')[cols].quantile(0.1)
-    p10.columns = [f'{col}_scn_p10' for col in p10.columns]
-    
-    # Range (max - min)
-    for col in cols:
-        aggs[f'{col}_scn_range'] = aggs[f'{col}_scn_max'] - aggs[f'{col}_scn_min']
-    
-    # Merge
-    result = aggs.join(p90).join(p10).reset_index()
-    return result
-
-# 주의: NaN 정보 보존 - fillna 금지 (Phase 21A 교훈)
-print("  Creating train aggregates...")
-train_scn_agg = create_scenario_aggregates(train, OPERATION_COLS)
-print(f"  Train aggregate shape: {train_scn_agg.shape}")
-
-print("  Creating test aggregates...")
-test_scn_agg = create_scenario_aggregates(test, OPERATION_COLS)
-print(f"  Test aggregate shape: {test_scn_agg.shape}")
-
-# Merge back to row-level
-train = train.merge(train_scn_agg, on='scenario_id', how='left')
-test = test.merge(test_scn_agg, on='scenario_id', how='left')
-
-print(f"\n  After scenario agg - Train: {train.shape}")
-print(f"  Added {len(train_scn_agg.columns) - 1} scenario aggregate features")
-
-del train_scn_agg, test_scn_agg
-gc.collect()
-```
-
-## Step 3: Saturation Features (Bin 9 원인 대응)
-
-**EDA 결과: pack_utilization/robot_utilization 포화가 Bin 9 원인**
-
-```python
-print("\n" + "="*70)
-print("Step 3: Saturation Features (Bin 9 대응)")
-print("="*70)
-
-def create_saturation_features(df):
-    """
-    EDA 4 결과: pack_util, robot_util이 1.0에 포화될 때 cascading
-    """
-    # Pack saturation
-    df['pack_util_sat_90'] = (df['pack_utilization'] > 0.9).astype(int)
-    df['pack_util_sat_95'] = (df['pack_utilization'] > 0.95).astype(int)
-    df['pack_util_margin'] = 1.0 - df['pack_utilization']
-    
-    # Robot saturation
-    df['robot_util_sat_80'] = (df['robot_utilization'] > 0.8).astype(int)
-    df['robot_util_margin'] = 1.0 - df['robot_utilization']
-    df['robot_active_ratio'] = df['robot_active'] / (df['robot_total'] + 1)
-    df['robot_active_margin'] = 1.0 - df['robot_active_ratio']
-    
-    # Multi-resource saturation (cascading trigger)
-    df['pack_AND_robot_sat'] = (
-        (df['pack_utilization'] > 0.85).astype(int) *
-        (df['robot_utilization'] > 0.7).astype(int)
-    )
-    df['pack_robot_combined_pressure'] = (
-        df['pack_utilization'] * df['robot_utilization']
-    )
-    
-    # Order inflow pressure
-    df['inflow_vs_robot'] = df['order_inflow_15m'] / (df['robot_active'] + 1)
-    df['inflow_vs_pack'] = df['order_inflow_15m'] / (df['pack_station_count'] + 1)
-    
-    # Loading dock saturation
-    df['dock_util_sat'] = (df['loading_dock_util'] > 0.8).astype(int)
-    
-    return df
-
-train = create_saturation_features(train)
-test = create_saturation_features(test)
-
-print(f"  Saturation features added: ~15")
-print(f"  Train shape: {train.shape}")
-```
-
-## Step 4: Pollaczek-Khinchine (Queueing Theory)
-
-**ρ/(1-ρ) 형태 — Tree가 자동 못 만드는 비선형**
-
-```python
-print("\n" + "="*70)
-print("Step 4: Queueing Theory Features")
-print("="*70)
-
-def create_queueing_features(df):
-    """
-    Pollaczek-Khinchine: Wait time = rho / (1 - rho) in M/M/1 queue
-    여러 자원에 대해 적용
-    """
-    eps = 1e-6
-    
-    # Pack station queue (W_pack)
-    df['W_pack'] = df['pack_utilization'] / (1 - df['pack_utilization'] + eps)
-    df['W_pack_squared'] = df['W_pack'] ** 2
-    
-    # Robot queue (W_robot)
-    df['W_robot'] = df['robot_utilization'] / (1 - df['robot_utilization'] + eps)
-    
-    # Robot active queue (from active/total ratio)
-    rho_r = df['robot_active'] / (df['robot_total'] + 1)
-    df['W_robot_active'] = rho_r / (1 - rho_r + eps)
-    
-    # Dock queue
-    df['W_dock'] = df['loading_dock_util'] / (1 - df['loading_dock_util'] + eps)
-    
-    # Total queueing time (sum of bottlenecks)
-    df['W_total'] = df[['W_pack', 'W_robot', 'W_dock']].sum(axis=1)
-    df['W_max'] = df[['W_pack', 'W_robot', 'W_dock']].max(axis=1)  # Bottleneck
-    
-    # Little's Law approximation: L = lambda * W
-    df['L_pack'] = df['order_inflow_15m'] * df['W_pack']
-    df['L_robot'] = df['order_inflow_15m'] * df['W_robot']
-    
-    return df
-
-train = create_queueing_features(train)
-test = create_queueing_features(test)
-
-print(f"  Queueing features added: ~10")
-```
-
-## Step 5: Layout-aware Features
-
-**EDA 5: Layout structure가 distribution shift의 주요 원인**
-
-```python
-print("\n" + "="*70)
-print("Step 5: Layout-aware Features")
-print("="*70)
-
-# Layout capacity ratios
-train['robot_per_area'] = train['robot_total'] / (train['floor_area_sqm'] + 1)
-test['robot_per_area'] = test['robot_total'] / (test['floor_area_sqm'] + 1)
-
-train['charger_per_robot'] = train['charger_count'] / (train['robot_total'] + 1)
-test['charger_per_robot'] = test['charger_count'] / (test['robot_total'] + 1)
-
-train['pack_per_area'] = train['pack_station_count'] / (train['floor_area_sqm'] + 1)
-test['pack_per_area'] = test['pack_station_count'] / (test['floor_area_sqm'] + 1)
-
-train['aisle_robot_density'] = train['robot_total'] / (train['aisle_width_avg'] + 0.1)
-test['aisle_robot_density'] = test['robot_total'] / (test['aisle_width_avg'] + 0.1)
-
-# Layout type one-hot (고정)
-for lt in ['grid', 'hybrid', 'hub_spoke', 'narrow']:
-    train[f'is_{lt}'] = (train['layout_type'] == lt).astype(int)
-    test[f'is_{lt}'] = (test['layout_type'] == lt).astype(int)
-
-print(f"  Layout features added: ~8")
-```
-
-## Step 6: OOF Target Encoding (Layout-level)
-
-**Layout_id의 target 평균 — leakage 방지 GroupKFold**
-
-```python
-print("\n" + "="*70)
-print("Step 6: OOF Target Encoding")
-print("="*70)
-
-def oof_target_encode(train_df, test_df, target_col, encode_col, n_splits=5, smoothing=10):
-    """
-    GroupKFold by layout_id based target encoding with Bayesian smoothing.
-    """
+def oof_target_encode_simple(train_df, test_df, target_col, encode_col, n_splits=5, smoothing=10):
+    from sklearn.model_selection import KFold
     global_mean = train_df[target_col].mean()
-    
-    # OOF for train
     train_encoded = np.zeros(len(train_df))
-    gkf = GroupKFold(n_splits=n_splits)
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
     
-    for tr_idx, val_idx in gkf.split(train_df, groups=train_df[encode_col]):
+    for tr_idx, val_idx in kf.split(train_df):
         tr_fold = train_df.iloc[tr_idx]
-        # Group stats on train fold
         stats = tr_fold.groupby(encode_col)[target_col].agg(['mean', 'count'])
-        # Bayesian smoothing
         smooth = (stats['mean'] * stats['count'] + global_mean * smoothing) / (stats['count'] + smoothing)
-        # Apply to validation
         train_encoded[val_idx] = train_df.iloc[val_idx][encode_col].map(smooth).fillna(global_mean).values
     
-    # For test: use full train
     stats_full = train_df.groupby(encode_col)[target_col].agg(['mean', 'count'])
     smooth_full = (stats_full['mean'] * stats_full['count'] + global_mean * smoothing) / (stats_full['count'] + smoothing)
     test_encoded = test_df[encode_col].map(smooth_full).fillna(global_mean).values
     
     return train_encoded, test_encoded
 
-# Layout target encoding
-print("  Encoding layout_id...")
-train['layout_id_te'], test['layout_id_te'] = oof_target_encode(
-    train, test, TARGET, 'layout_id', n_splits=5, smoothing=10
-)
+# layout_id target encoding 완전 제거
+# (layout 구조 변수들로 충분)
+print("  Skipping layout_id target encoding (GroupKFold design issue)")
+print("  Layout info already captured via layout_info.csv features")
 
-# Layout type target encoding
+# layout_type만 encoding (simple KFold)
 print("  Encoding layout_type...")
-train['layout_type_te'], test['layout_type_te'] = oof_target_encode(
+train['layout_type_te'], test['layout_type_te'] = oof_target_encode_simple(
     train, test, TARGET, 'layout_type', n_splits=5, smoothing=5
 )
-
-print("  Target encoding done")
 ```
 
-## Step 7: NaN Pattern Features
-
-**Phase 21A 교훈: NaN은 정보. fillna 금지**
-
+### Step 8 수정 (3-fold importance)
 ```python
 print("\n" + "="*70)
-print("Step 7: NaN Pattern Features")
+print("Step 8: Multi-fold Feature Selection")
 print("="*70)
 
-def create_nan_features(df, cols):
-    """NaN은 정보. 패턴을 feature로."""
-    # Row-level NaN count
-    df['nan_count_operation'] = df[cols].isna().sum(axis=1)
-    df['nan_ratio_operation'] = df['nan_count_operation'] / len(cols)
-    
-    # Scenario-level NaN pattern
-    df['nan_count_scn_mean'] = df.groupby('scenario_id')['nan_count_operation'].transform('mean')
-    df['nan_count_scn_max'] = df.groupby('scenario_id')['nan_count_operation'].transform('max')
-    
-    # 주요 컬럼 개별 flag
-    critical_cols = ['order_inflow_15m', 'robot_active', 'pack_utilization',
-                     'charge_queue_length', 'congestion_score']
-    for col in critical_cols:
-        if col in df.columns:
-            df[f'{col}_isnan'] = df[col].isna().astype(int)
-    
-    return df
-
-train = create_nan_features(train, OPERATION_COLS)
-test = create_nan_features(test, OPERATION_COLS)
-
-print(f"  NaN features added: ~10")
-```
-
-## Step 8: Feature Selection — Zero Importance Removal
-
-**AMEX 2위 step 1: zero importance 제거**
-
-```python
-print("\n" + "="*70)
-print("Step 8: Feature Selection (Zero Importance)")
-print("="*70)
-
-# Prepare features
 drop_cols = ['ID', 'scenario_id', 'layout_id', 'layout_type', TARGET]
 feature_cols = [c for c in train.columns if c not in drop_cols]
-
-# Keep only numeric
-numeric_cols = []
-for c in feature_cols:
-    if train[c].dtype in [np.float64, np.int64, np.float32, np.int32]:
-        numeric_cols.append(c)
+numeric_cols = [c for c in feature_cols if train[c].dtype in [np.float64, np.int64, np.float32, np.int32]]
 feature_cols = numeric_cols
-print(f"  Numeric features: {len(feature_cols)}")
+print(f"  Total numeric features: {len(feature_cols)}")
 
-# Quick LGB for importance
 X = train[feature_cols]
 y = train[TARGET]
 groups = train['layout_id']
 
-# Single fold quick importance check (전체 CV 아님)
-gkf = GroupKFold(n_splits=5)
-tr_idx, val_idx = next(gkf.split(X, y, groups))
+# 3-fold importance (다른 seed)
+importance_folds = []
+gkf_imp = GroupKFold(n_splits=3)
 
-quick_model = lgb.LGBMRegressor(
-    n_estimators=500,
-    learning_rate=0.05,
-    num_leaves=63,
-    max_depth=-1,
-    min_child_samples=50,
-    feature_fraction=0.7,
-    bagging_fraction=0.8,
-    bagging_freq=5,
-    objective='huber',
-    random_state=42,
-    verbose=-1,
-    n_jobs=-1
-)
-quick_model.fit(
-    X.iloc[tr_idx], y.iloc[tr_idx],
-    eval_set=[(X.iloc[val_idx], y.iloc[val_idx])],
-    callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)]
-)
+for fold_idx, (tr_idx, val_idx) in enumerate(gkf_imp.split(X, y, groups)):
+    quick_model = lgb.LGBMRegressor(
+        n_estimators=300, learning_rate=0.05, num_leaves=63,
+        min_child_samples=50, feature_fraction=0.7,
+        objective='huber', random_state=42 + fold_idx,
+        verbose=-1, n_jobs=-1
+    )
+    quick_model.fit(
+        X.iloc[tr_idx], y.iloc[tr_idx],
+        eval_set=[(X.iloc[val_idx], y.iloc[val_idx])],
+        callbacks=[lgb.early_stopping(30, verbose=False), lgb.log_evaluation(0)]
+    )
+    fold_imp = pd.DataFrame({
+        'feature': feature_cols,
+        'importance': quick_model.feature_importances_
+    })
+    importance_folds.append(fold_imp)
+    print(f"  Fold {fold_idx+1} importance computed")
 
-imp = pd.DataFrame({
-    'feature': feature_cols,
-    'importance': quick_model.feature_importances_
-}).sort_values('importance', ascending=False)
-
+imp = pd.concat(importance_folds).groupby('feature')['importance'].mean().reset_index()
+imp = imp.sort_values('importance', ascending=False)
 imp.to_csv('output/phase23_track_a_importance.csv', index=False)
 
-zero_imp = imp[imp['importance'] == 0]['feature'].tolist()
-print(f"\n  Total features: {len(feature_cols)}")
-print(f"  Zero importance: {len(zero_imp)}")
+# 제거 기준 1: ALL folds에서 zero
+zero_imp_all = set(feature_cols)
+for fold_imp in importance_folds:
+    non_zero = set(fold_imp[fold_imp['importance'] > 0]['feature'])
+    zero_imp_all -= non_zero
+print(f"  Zero in ALL folds: {len(zero_imp_all)}")
+
+# 제거 기준 2: 평균 하위 5%
+low_threshold = imp['importance'].quantile(0.05)
+low_imp = set(imp[imp['importance'] <= low_threshold]['feature'].tolist())
+print(f"  Bottom 5% avg importance: {len(low_imp)}")
+
+# 합집합
+remove_features = zero_imp_all | low_imp
+final_features = [f for f in feature_cols if f not in remove_features]
+
+print(f"\n  Removing: {len(remove_features)} features")
+print(f"  Final: {len(final_features)}")
 print(f"  Top 10: {imp.head(10)['feature'].tolist()}")
-
-# Bottom 10% 제거 (aggressive removal)
-bottom_threshold = imp['importance'].quantile(0.10)
-low_imp = imp[imp['importance'] <= bottom_threshold]['feature'].tolist()
-print(f"  Removing bottom 10% ({len(low_imp)} features, importance <= {bottom_threshold})")
-
-# Final feature set
-final_features = [f for f in feature_cols if f not in low_imp]
-print(f"  Final features: {len(final_features)}")
 
 # Save
 with open('output/phase23_track_a_features.pkl', 'wb') as f:
     pickle.dump({
         'all_features': feature_cols,
-        'zero_imp': zero_imp,
-        'low_imp': low_imp,
-        'final_features': final_features
+        'zero_imp_all_folds': list(zero_imp_all),
+        'low_imp': list(low_imp),
+        'remove_features': list(remove_features),
+        'final_features': final_features,
+        'importance': imp.to_dict('records')
     }, f)
 ```
 
-## Step 9: Full CV with Final Features
-
-**7-model ensemble 재학습 (새 feature 포함)**
-
-```python
-print("\n" + "="*70)
-print("Step 9: 5-Fold CV with Track A Features")
-print("="*70)
-
-X = train[final_features]
-y = train[TARGET]
-X_test = test[final_features]
-groups = train['layout_id']
-
-oof_preds = np.zeros(len(train))
-test_preds = np.zeros(len(test))
-fold_maes = []
-
-gkf = GroupKFold(n_splits=5)
-
-for fold, (tr_idx, val_idx) in enumerate(gkf.split(X, y, groups)):
-    print(f"\n  Fold {fold + 1}/5")
-    X_tr, X_val = X.iloc[tr_idx], X.iloc[val_idx]
-    y_tr, y_val = y.iloc[tr_idx], y.iloc[val_idx]
-    
-    model = lgb.LGBMRegressor(
-        n_estimators=5000,
-        learning_rate=0.03,
-        num_leaves=127,
-        max_depth=-1,
-        min_child_samples=30,
-        feature_fraction=0.6,
-        bagging_fraction=0.8,
-        bagging_freq=5,
-        objective='huber',
-        alpha=0.9,
-        random_state=42,
-        verbose=-1,
-        n_jobs=-1,
-        device='gpu'  # Kaggle T4
-    )
-    
-    try:
-        model.fit(
-            X_tr, y_tr,
-            eval_set=[(X_val, y_val)],
-            callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)]
-        )
-    except Exception as e:
-        # GPU 실패 시 CPU fallback
-        print(f"    GPU failed, CPU fallback: {e}")
-        model = lgb.LGBMRegressor(
-            n_estimators=5000, learning_rate=0.03, num_leaves=127,
-            min_child_samples=30, feature_fraction=0.6, bagging_fraction=0.8,
-            bagging_freq=5, objective='huber', alpha=0.9,
-            random_state=42, verbose=-1, n_jobs=-1
-        )
-        model.fit(
-            X_tr, y_tr,
-            eval_set=[(X_val, y_val)],
-            callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)]
-        )
-    
-    oof_preds[val_idx] = model.predict(X_val)
-    test_preds += model.predict(X_test) / 5
-    
-    fold_mae = mean_absolute_error(y_val, oof_preds[val_idx])
-    fold_maes.append(fold_mae)
-    print(f"    Fold {fold + 1} MAE: {fold_mae:.4f}")
-
-cv_mae = mean_absolute_error(y, oof_preds)
-print(f"\n  CV MAE: {cv_mae:.4f}")
-print(f"  Fold MAEs: {[f'{m:.4f}' for m in fold_maes]}")
-print(f"  Fold std: {np.std(fold_maes):.4f}")
-
-# 예상: 기존 Phase 16 CV 8.38 → 8.15~8.25 (개선 기대)
-```
-
-## Step 10: Submission + Save
-
-```python
-print("\n" + "="*70)
-print("Step 10: Save Results")
-print("="*70)
-
-# Clip predictions to valid range
-test_preds = np.clip(test_preds, 0, train[TARGET].max() * 1.1)
-
-# Submission
-submission = pd.read_csv('data/sample_submission.csv')
-submission[TARGET] = test_preds
-submission.to_csv('output/phase23_track_a_submission.csv', index=False)
-
-# OOF save (for later stacking)
-np.save('output/phase23_track_a_oof.npy', oof_preds)
-np.save('output/phase23_track_a_test.npy', test_preds)
-
-# Save checkpoint
-ckpt = {
-    'cv_mae': cv_mae,
-    'fold_maes': fold_maes,
-    'final_features': final_features,
-    'feature_count': len(final_features),
-    'model_params': model.get_params()
-}
-with open('output/phase23_track_a_ckpt.pkl', 'wb') as f:
-    pickle.dump(ckpt, f)
-
-print(f"\n✅ Track A complete")
-print(f"   CV MAE: {cv_mae:.4f}")
-print(f"   Features: {len(final_features)}")
-print(f"   Files: output/phase23_track_a_*")
-```
-
-## 작성 완료 체크
-
-- 실행 금지, 작성만
-- Scenario aggregate가 핵심 (EDA 2 verdict STRONG)
-- Deviation feature 절대 추가 금지 (corr ~0)
-- Sequence/lag feature 절대 추가 금지 (autocorr 0.29)
-- GPU fallback 포함
-- ast.parse 통과
-- 커밋 메시지: "feat: Phase 23 Track A - AMEX aggregate + saturation + queueing"
+## 기타 확인
+- Step 9 (full CV)와 Step 10 (save)는 변경 없음
+- layout_id_te 참조하는 다른 코드 없는지 확인
+- ast.parse 통과 확인
+- 커밋: "fix: Phase 23 Track A - target encoding + multi-fold selection"
+- 푸시
 - claude_results.md 저장
-- 푸시 → Kaggle 실행 준비

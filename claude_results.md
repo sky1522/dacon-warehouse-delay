@@ -1,26 +1,15 @@
-# Phase 23 Track A: AMEX Aggregate + Saturation + Queueing
+# Phase 23 Track A: Codex 리뷰 반영 3개 수정
 
-## EDA 결과 반영
-- INDEPENDENT_SNAPSHOTS (autocorr 0.29) → sequence/lag feature 금지
-- STRONG aggregate (improvement 0.21) → scenario aggregate 대거 추가
-- Deviation corr ~0 → deviation feature 금지
-- Bin 9 원인: pack/robot 포화 → saturation features
-- Adversarial AUC 0.66 → layout-aware features
+## Fix 1 (HIGH): layout_type target encoding ValueError
+- layout_type = 4 unique → GroupKFold(5) 불가
+- KFold(shuffle=True)로 변경
 
-## 10-Step Pipeline
-1. **핵심 변수 정의**: OPERATION_COLS (~50), LAYOUT_COLS (~13)
-2. **Scenario Aggregate**: mean/std/min/max/median/p90/p10/range per scenario (AMEX 2위 스타일)
-3. **Saturation Features**: pack/robot/dock 포화 indicators, margin, combined pressure (~15)
-4. **Queueing Theory**: W_pack, W_robot, W_dock (rho/(1-rho)), Little's Law (~10)
-5. **Layout-aware**: capacity ratios, layout type one-hot (~8)
-6. **OOF Target Encoding**: layout_id, layout_type (GroupKFold, Bayesian smoothing)
-7. **NaN Pattern**: count, ratio, scenario-level, critical column flags (~10)
-8. **Feature Selection**: zero importance + bottom 10% removal
-9. **5-Fold CV**: LGB Huber (GPU with CPU fallback), 5000 trees
-10. **Save**: submission, OOF, checkpoint
+## Fix 2 (MEDIUM): layout_id target encoding 설계 결함 제거
+- GroupKFold(groups=layout_id)로 split 시 val layout이 train에 없음
+- train OOF가 모두 global_mean (상수) → test와 불일치
+- layout_id target encoding 완전 제거 (layout 구조 변수 13개로 충분)
 
-## 출력
-- `output/phase23_track_a_submission.csv`
-- `output/phase23_track_a_oof.npy`, `_test.npy`
-- `output/phase23_track_a_importance.csv`
-- `output/phase23_track_a_ckpt.pkl`
+## Fix 3 (LOW): Feature selection 3-fold 평균으로 개선
+- 기존: single fold importance
+- 수정: 3-fold GroupKFold 평균 importance
+- 제거 기준: ALL folds에서 zero OR bottom 5% 평균 importance

@@ -235,33 +235,30 @@ for df in [train, test]:
 print(f"  Layout features added: ~8", flush=True)
 
 # ##############################################################
-# Step 6: OOF Target Encoding (Layout-level)
+# Step 6: OOF Target Encoding (layout_type only)
 # ##############################################################
 print("\n" + "=" * 70, flush=True)
 print("Step 6: OOF Target Encoding", flush=True)
 print("=" * 70, flush=True)
 
 
-def oof_target_encode(train_df, test_df, target_col, encode_col, n_splits=5, smoothing=10):
+def oof_target_encode_simple(train_df, test_df, target_col, encode_col, n_splits=5, smoothing=10):
     """
-    GroupKFold by layout_id based target encoding with Bayesian smoothing.
+    Simple KFold target encoding with Bayesian smoothing.
+    (GroupKFold by encode_col causes leakage issues for layout_id,
+     and ValueError for layout_type with only 4 unique values.)
     """
+    from sklearn.model_selection import KFold
     global_mean = train_df[target_col].mean()
-
-    # OOF for train
     train_encoded = np.zeros(len(train_df))
-    gkf = GroupKFold(n_splits=n_splits)
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
 
-    for tr_idx, val_idx in gkf.split(train_df, groups=train_df[encode_col]):
+    for tr_idx, val_idx in kf.split(train_df):
         tr_fold = train_df.iloc[tr_idx]
-        # Group stats on train fold
         stats = tr_fold.groupby(encode_col)[target_col].agg(['mean', 'count'])
-        # Bayesian smoothing
         smooth = (stats['mean'] * stats['count'] + global_mean * smoothing) / (stats['count'] + smoothing)
-        # Apply to validation
         train_encoded[val_idx] = train_df.iloc[val_idx][encode_col].map(smooth).fillna(global_mean).values
 
-    # For test: use full train
     stats_full = train_df.groupby(encode_col)[target_col].agg(['mean', 'count'])
     smooth_full = (stats_full['mean'] * stats_full['count'] + global_mean * smoothing) / (stats_full['count'] + smoothing)
     test_encoded = test_df[encode_col].map(smooth_full).fillna(global_mean).values
@@ -269,15 +266,13 @@ def oof_target_encode(train_df, test_df, target_col, encode_col, n_splits=5, smo
     return train_encoded, test_encoded
 
 
-# Layout target encoding
-print("  Encoding layout_id...", flush=True)
-train['layout_id_te'], test['layout_id_te'] = oof_target_encode(
-    train, test, TARGET, 'layout_id', n_splits=5, smoothing=10
-)
+# layout_id target encoding 제거 (GroupKFold 설계 결함: val layout이 train에 없어 전부 global_mean)
+print("  Skipping layout_id target encoding (GroupKFold design issue)", flush=True)
+print("  Layout info already captured via layout_info.csv features", flush=True)
 
-# Layout type target encoding
+# layout_type만 encoding (simple KFold)
 print("  Encoding layout_type...", flush=True)
-train['layout_type_te'], test['layout_type_te'] = oof_target_encode(
+train['layout_type_te'], test['layout_type_te'] = oof_target_encode_simple(
     train, test, TARGET, 'layout_type', n_splits=5, smoothing=5
 )
 
@@ -320,7 +315,7 @@ print(f"  NaN features added: ~10", flush=True)
 # Step 8: Feature Selection — Zero Importance Removal
 # ##############################################################
 print("\n" + "=" * 70, flush=True)
-print("Step 8: Feature Selection (Zero Importance)", flush=True)
+print("Step 8: Multi-fold Feature Selection", flush=True)
 print("=" * 70, flush=True)
 
 # Prepare features
@@ -333,65 +328,68 @@ for c in feature_cols:
     if train[c].dtype in [np.float64, np.int64, np.float32, np.int32]:
         numeric_cols.append(c)
 feature_cols = numeric_cols
-print(f"  Numeric features: {len(feature_cols)}", flush=True)
+print(f"  Total numeric features: {len(feature_cols)}", flush=True)
 
-# Quick LGB for importance
 X = train[feature_cols]
 y = train[TARGET]
 groups = train['layout_id']
 
-# Single fold quick importance check
-gkf = GroupKFold(n_splits=5)
-tr_idx, val_idx = next(gkf.split(X, y, groups))
+# 3-fold importance (different seeds for robustness)
+importance_folds = []
+gkf_imp = GroupKFold(n_splits=3)
 
-quick_model = lgb.LGBMRegressor(
-    n_estimators=500,
-    learning_rate=0.05,
-    num_leaves=63,
-    max_depth=-1,
-    min_child_samples=50,
-    feature_fraction=0.7,
-    bagging_fraction=0.8,
-    bagging_freq=5,
-    objective='huber',
-    random_state=42,
-    verbose=-1,
-    n_jobs=-1
-)
-quick_model.fit(
-    X.iloc[tr_idx], y.iloc[tr_idx],
-    eval_set=[(X.iloc[val_idx], y.iloc[val_idx])],
-    callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)]
-)
+for fold_idx, (tr_idx, val_idx) in enumerate(gkf_imp.split(X, y, groups)):
+    quick_model = lgb.LGBMRegressor(
+        n_estimators=300, learning_rate=0.05, num_leaves=63,
+        min_child_samples=50, feature_fraction=0.7,
+        objective='huber', random_state=42 + fold_idx,
+        verbose=-1, n_jobs=-1
+    )
+    quick_model.fit(
+        X.iloc[tr_idx], y.iloc[tr_idx],
+        eval_set=[(X.iloc[val_idx], y.iloc[val_idx])],
+        callbacks=[lgb.early_stopping(30, verbose=False), lgb.log_evaluation(0)]
+    )
+    fold_imp = pd.DataFrame({
+        'feature': feature_cols,
+        'importance': quick_model.feature_importances_
+    })
+    importance_folds.append(fold_imp)
+    print(f"  Fold {fold_idx + 1} importance computed", flush=True)
 
-imp = pd.DataFrame({
-    'feature': feature_cols,
-    'importance': quick_model.feature_importances_
-}).sort_values('importance', ascending=False)
-
+imp = pd.concat(importance_folds).groupby('feature')['importance'].mean().reset_index()
+imp = imp.sort_values('importance', ascending=False)
 imp.to_csv('output/phase23_track_a_importance.csv', index=False)
 
-zero_imp = imp[imp['importance'] == 0]['feature'].tolist()
-print(f"\n  Total features: {len(feature_cols)}", flush=True)
-print(f"  Zero importance: {len(zero_imp)}", flush=True)
+# Removal criterion 1: zero in ALL folds
+zero_imp_all = set(feature_cols)
+for fold_imp in importance_folds:
+    non_zero = set(fold_imp[fold_imp['importance'] > 0]['feature'])
+    zero_imp_all -= non_zero
+print(f"\n  Zero in ALL folds: {len(zero_imp_all)}", flush=True)
+
+# Removal criterion 2: bottom 5% average importance
+low_threshold = imp['importance'].quantile(0.05)
+low_imp = set(imp[imp['importance'] <= low_threshold]['feature'].tolist())
+print(f"  Bottom 5% avg importance: {len(low_imp)}", flush=True)
+
+# Union
+remove_features = zero_imp_all | low_imp
+final_features = [f for f in feature_cols if f not in remove_features]
+
+print(f"\n  Removing: {len(remove_features)} features", flush=True)
+print(f"  Final: {len(final_features)}", flush=True)
 print(f"  Top 10: {imp.head(10)['feature'].tolist()}", flush=True)
-
-# Bottom 10% 제거
-bottom_threshold = imp['importance'].quantile(0.10)
-low_imp = imp[imp['importance'] <= bottom_threshold]['feature'].tolist()
-print(f"  Removing bottom 10% ({len(low_imp)} features, importance <= {bottom_threshold})", flush=True)
-
-# Final feature set
-final_features = [f for f in feature_cols if f not in low_imp]
-print(f"  Final features: {len(final_features)}", flush=True)
 
 # Save
 with open('output/phase23_track_a_features.pkl', 'wb') as f:
     pickle.dump({
         'all_features': feature_cols,
-        'zero_imp': zero_imp,
-        'low_imp': low_imp,
-        'final_features': final_features
+        'zero_imp_all_folds': list(zero_imp_all),
+        'low_imp': list(low_imp),
+        'remove_features': list(remove_features),
+        'final_features': final_features,
+        'importance': imp.to_dict('records')
     }, f)
 
 # ##############################################################
