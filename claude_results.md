@@ -1,24 +1,19 @@
-# Phase 22: Cascading Binary + Layout Cluster Features
+# Phase 23 Pre-EDA: 데이터 구조 근본적 재검증
 
 ## 스크립트
-- `run_phase22_cascade_cluster.py` (Phase 16 base + 12 new features)
+- `run_phase23_preeda.py` (Kaggle CPU 15분 내)
 
-## 추가 Features (12개)
-### A. Cascading Binary (5)
-- `rho_over_70`, `rho_over_85`, `rho_over_95`: rho_max 임계값 indicators
-- `multi_pressure`: robot+pack+charger 동시 과부하 count
-- `explosion_intensity`: rho_max * multi_pressure
+## 5개 EDA
+1. **Sequence Structure**: autocorrelation, shuffle test, shift_hour monotonic, variance ratio → TRUE_SEQUENCE / WEAK / INDEPENDENT 판정
+2. **Scenario Aggregate**: AMEX 스타일 aggregate(mean/std/max/p90) correlation, deviation/zscore → STRONG / WEAK 판정
+3. **Feature Importance**: Phase 16 ckpt에서 importance 분석, zero-importance removal 후보
+4. **Bin 9 특성**: shift_hour/layout_type 분포, key feature 차이, layout 집중도, scenario cluster 패턴
+5. **Distribution Shift**: GroupKFold adversarial AUC, top shift features
 
-### B. Layout Cluster (4)
-- KMeans 10 cluster on layout_info
-- `cluster_mean_target`, `cluster_p95_target`, `cluster_bin9_rate`, `cluster_size`
-- Train-only 통계 (test leakage 방지)
-
-### C. Cross Features (3)
-- `rho85_x_clusterbin9`: rho>0.85 * cluster bin9 rate
-- `multipress_x_compact`: multi_pressure * layout_compactness
-- `explosion_x_narrow`: explosion_intensity * (aisle_width < 2.5)
-
-## 판단 기준
-- Ensemble CV < 8.4403 → 새 features 효과 있음
-- Phase 22 new features importance rank 확인
+## 출력
+- `output/phase23_eda/01_autocorr.csv`, `01_conclusion.txt`
+- `output/phase23_eda/02_scenario_agg.csv`, `02_deviation.csv`
+- `output/phase23_eda/03_feature_importance.csv`, `03_removal_candidates.txt`
+- `output/phase23_eda/04_bin9_hour.csv`, `04_bin9_features.csv`
+- `output/phase23_eda/05_adversarial.csv`
+- `output/phase23_eda/SUMMARY.txt`
