@@ -1,84 +1,79 @@
-run_phase22_eda.py 2가지 critical 버그 수정.
+Phase 22 본 작업: Cascading + Layout Cluster Features 추가
 
-## Bug 1: Layout 컬럼 merge 누락
-data/train.csv에 robot_total, aisle_width_avg 등 layout 컬럼이 없음.
-data/layout_info.csv를 layout_id로 merge 필요.
+Base: run_phase16_fe.py 복사 → run_phase22_cascade_cluster.py
+실행 금지, 작성만.
 
-수정:
+## 추가 Features (Phase 17 FE 뒤에)
+
+### A. Cascading Binary (5개)
 ```python
-import pandas as pd, numpy as np
-import os
+# NaN 처리된 후, FE 뒤에 추가
+combined['rho_robot'] = combined['robot_active'] / (combined['robot_total'] + 1e-6)
+combined['rho_pack'] = combined['pack_utilization'].fillna(0.3)
+combined['rho_charger'] = combined['charge_queue_length'] / (combined['charger_count'] + 1e-6)
+combined['rho_max_new'] = combined[['rho_robot', 'rho_pack', 'rho_charger']].max(axis=1)
 
-train = pd.read_csv('data/train.csv')
-test = pd.read_csv('data/test.csv')
+combined['rho_over_70'] = (combined['rho_max_new'] > 0.70).astype(int)
+combined['rho_over_85'] = (combined['rho_max_new'] > 0.85).astype(int)
+combined['rho_over_95'] = (combined['rho_max_new'] > 0.95).astype(int)
+
+combined['robot_pressure'] = (combined['rho_robot'] > 0.85).astype(int)
+combined['pack_pressure'] = (combined['pack_utilization'] > 0.80).astype(int)
+combined['charger_pressure'] = (combined['charge_queue_length'] > 5).astype(int)
+combined['multi_pressure'] = combined['robot_pressure'] + combined['pack_pressure'] + combined['charger_pressure']
+
+combined['explosion_intensity'] = combined['rho_max_new'] * combined['multi_pressure']
+```
+
+### B. Layout Cluster (4개)
+```python
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+
 layout_info = pd.read_csv('data/layout_info.csv')
-
-print(f"Train cols: {train.columns.tolist()[:10]}...")
-print(f"Layout cols: {layout_info.columns.tolist()}")
-
-# Merge layout features
-train = train.merge(layout_info, on='layout_id', how='left')
-test = test.merge(layout_info, on='layout_id', how='left')
-
-print(f"After merge: train shape {train.shape}, test shape {test.shape}")
-```
-
-## Bug 2: position_in_scenario 컬럼 없음
-scenario 내 timestep 순서는 cumcount로 생성:
-
-```python
-# Position 생성 (scenario_id 내 순서)
-train = train.sort_values(['scenario_id'])  # 또는 ID 순서 유지
-train['position_in_scenario'] = train.groupby('scenario_id').cumcount()
-test['position_in_scenario'] = test.groupby('scenario_id').cumcount()
-```
-
-만약 train.csv에 timestep을 알 수 있는 다른 컬럼(예: ID, time 등) 있으면 그걸 우선 사용.
-
-## Bug 3: NaN 명시 처리 (rho_diff, rho_velocity_3)
-```python
-# NaN을 0으로 채워서 명시 (correlation 영향 X, 통계는 정확)
-train['rho_diff'] = train['rho_diff'].fillna(0)
-train['rho_velocity_3'] = train['rho_velocity_3'].fillna(0)
-```
-
-## Bug 4: Bin 9 empty guard
-```python
-if len(bin9) == 0:
-    print("⚠️ Bin 9 sample 없음, skip")
-else:
-    # 기존 로직
-```
-
-## Bug 5: KMeans는 layout_info에서 직접 시작
-train/test 거치지 말고 layout_info에서 바로 cluster:
-
-```python
 layout_features = ['aisle_width_avg', 'robot_total', 'intersection_count',
                     'layout_compactness', 'pack_station_count', 'charger_count',
                     'one_way_ratio', 'floor_area_sqm', 'zone_dispersion']
 
-# layout_info에서 직접 KMeans
-X_layouts = layout_info[layout_features].fillna(0).values
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X_layouts)
-
+X = layout_info[layout_features].fillna(0).values
+X_scaled = StandardScaler().fit_transform(X)
 km = KMeans(n_clusters=10, random_state=42, n_init=10)
-layout_info['cluster'] = km.fit_predict(X_scaled)
+layout_info['layout_cluster'] = km.fit_predict(X_scaled)
 
-# Train/Test에 cluster 할당
-train_layout_ids = train['layout_id'].unique()
-test_layout_ids = test['layout_id'].unique()
+# Cluster별 통계 (train만 사용, test leakage 방지)
+cluster_stats = train_df.merge(
+    layout_info[['layout_id', 'layout_cluster']], on='layout_id'
+).groupby('layout_cluster').agg(
+    cluster_mean_target=('avg_delay_minutes_next_30m', 'mean'),
+    cluster_p95_target=('avg_delay_minutes_next_30m', lambda x: x.quantile(0.95)),
+    cluster_bin9_rate=('avg_delay_minutes_next_30m', lambda x: (x > 100).mean()),
+    cluster_size=('avg_delay_minutes_next_30m', 'count')
+).reset_index()
 
-train_clusters = layout_info[layout_info['layout_id'].isin(train_layout_ids)]['cluster']
-test_clusters = layout_info[layout_info['layout_id'].isin(test_layout_ids)]['cluster']
-
-print(f"Train layout clusters: {train_clusters.value_counts().sort_index().to_dict()}")
-print(f"Test layout clusters: {test_clusters.value_counts().sort_index().to_dict()}")
+# combined에 merge
+combined = combined.merge(layout_info[['layout_id', 'layout_cluster']], on='layout_id', how='left')
+combined = combined.merge(cluster_stats, on='layout_cluster', how='left')
 ```
 
-## 작업 후
-- 데이터 컬럼 확인 print 추가 (디버깅용)
-- 수정 후 ast.parse 확인
-- 커밋: "fix: Phase 22 EDA - layout merge + position cumcount + NaN handling"
-- 푸시
+### C. Cross Features (3개)
+```python
+combined['rho85_x_clusterbin9'] = combined['rho_over_85'] * combined['cluster_bin9_rate']
+combined['multipress_x_compact'] = combined['multi_pressure'] * combined['layout_compactness']
+combined['explosion_x_narrow'] = combined['explosion_intensity'] * (combined['aisle_width_avg'] < 2.5).astype(int)
+```
+
+## 모델
+- Phase 16과 동일한 7 models (LGB×3 + XGB + Cat×2 + MLP)
+- TabNet 포함 (Kaggle 환경에서 pytorch-tabnet OK)
+- 총 feature: 692 + 12 = 704
+- 체크포인트: ckpt_phase22_*.pkl
+- Submission: submission_phase22.csv
+
+## 결과 출력
+- 7 모델 CV (Phase 16 대비)
+- Ensemble CV
+- 새 12 features의 importance 순위
+- Cluster별 MAE
+
+커밋: feat: Phase 22 - cascading binary + layout cluster features
+푸시.

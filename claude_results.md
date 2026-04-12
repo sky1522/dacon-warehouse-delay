@@ -1,16 +1,24 @@
-# Phase 22 Pre-EDA: Cascading + Layout Cluster Validation
+# Phase 22: Cascading Binary + Layout Cluster Features
 
 ## 스크립트
-- `run_phase22_eda.py` (Kaggle 30분 내 실행 가능)
+- `run_phase22_cascade_cluster.py` (Phase 16 base + 12 new features)
 
-## 4가지 검증
-1. **Q1: Cascading Detector** - rho utilization, binary indicators, multi_pressure, rho velocity → target correlation
-2. **Q2: Layout Clustering** - K-means 10 cluster, train/test 분포 비교, cluster별 target/MAE
-3. **Q3: rho-band x Position** - position별 rho/target 분포, cascading 발생 시점
-4. **Q4: Bin 9 특성** - target>100 sample의 rho/pressure 특성
+## 추가 Features (12개)
+### A. Cascading Binary (5)
+- `rho_over_70`, `rho_over_85`, `rho_over_95`: rho_max 임계값 indicators
+- `multi_pressure`: robot+pack+charger 동시 과부하 count
+- `explosion_intensity`: rho_max * multi_pressure
 
-## 출력 파일
-- `output/phase22_eda/cascading_correlations.csv`
-- `output/phase22_eda/layout_clusters.csv`
-- `output/phase22_eda/cluster_mae.csv`
-- `output/phase22_eda/bin9_characteristics.csv`
+### B. Layout Cluster (4)
+- KMeans 10 cluster on layout_info
+- `cluster_mean_target`, `cluster_p95_target`, `cluster_bin9_rate`, `cluster_size`
+- Train-only 통계 (test leakage 방지)
+
+### C. Cross Features (3)
+- `rho85_x_clusterbin9`: rho>0.85 * cluster bin9 rate
+- `multipress_x_compact`: multi_pressure * layout_compactness
+- `explosion_x_narrow`: explosion_intensity * (aisle_width < 2.5)
+
+## 판단 기준
+- Ensemble CV < 8.4403 → 새 features 효과 있음
+- Phase 22 new features importance rank 확인
