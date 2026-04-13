@@ -974,8 +974,8 @@ print("\n" + "=" * 60, flush=True)
 print("=== Part 5: Training ===", flush=True)
 print("=" * 60, flush=True)
 
-train_fe = combined[combined['_is_train'] == 1].copy()
-test_fe = combined[combined['_is_train'] == 0].copy()
+train_fe = combined[combined['_is_train'] == 1].sort_values('_original_idx').reset_index(drop=True)
+test_fe = combined[combined['_is_train'] == 0].sort_values('_original_idx').reset_index(drop=True)
 del combined; gc.collect()
 
 feature_cols = final_feature_cols
@@ -985,8 +985,10 @@ y_log = np.log1p(y); y_sqrt = np.sqrt(y)
 groups = train_fe['layout_id']
 time_idx = train_fe['implicit_timeslot'].values.astype(np.float32)
 X_test = test_fe[feature_cols]
-assert (test_fe['ID'].values == sample_sub['ID'].values).all()
-print(f"Features: {len(feature_cols)}, ID verified", flush=True)
+assert (test_fe['ID'].values == sample_sub['ID'].values).all(), \
+    f"Test ID mismatch: first 5 test_fe={test_fe['ID'].iloc[:5].tolist()}, sample_sub={sample_sub['ID'].iloc[:5].tolist()}"
+print(f"ID alignment verified: {len(test_fe)} test rows", flush=True)
+print(f"Features: {len(feature_cols)}", flush=True)
 
 y_binned = pd.qcut(y, q=5, labels=False, duplicates='drop')
 sgkf = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
