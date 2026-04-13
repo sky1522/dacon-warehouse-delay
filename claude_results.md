@@ -1,22 +1,21 @@
-# Phase 23 Track A v2: Layout-aware, Scenario-agnostic
+# Phase 18 Recovery: H1 (log1p target) + H3 (composite features)
 
-## v1 실패 교훈
-- Scenario aggregate → train/test 분포 차이로 Public 10.28 (baseline 9.86 대비 악화)
-- Test layout 50/100 unseen → scenario aggregate 무의미
-- GroupKFold CV 8.79 → Public 10.28 (gap 1.49)
+## 설계 원칙
+- Phase 16 구조 100% 유지 (692 features, 8 models, StratifiedGroupKFold)
+- 변경 단 2가지만
 
-## v2 설계 원칙
-1. Scenario aggregate 완전 제거
-2. Row-level features + Layout-aware features만
-3. Unseen layout 대응 (구조 변수 x 운영 변수 interaction)
+## 변경 1: H1 - Target Transform
+- ALL 8 models train on log1p(y), predict with expm1()
+- Model 2 (LGB Huber), Model 5 (Cat log1p), Model 7 (MLP): 이미 log1p → 변경 없음
+- Model 1 (LGB MAE), 3 (LGB sqrt→log1p), 4 (XGB), 6 (Cat raw→log1p), 8 (TabNet): log1p로 변경
 
-## 9-Step Pipeline
-1. **Saturation**: pack/robot/dock margin, cascading trigger, inflow pressure (~13)
-2. **Queueing W**: rho/(1-rho), Little's Law, bottleneck (~7)
-3. **Layout Capacity**: density, congestion potential, oneway penalty (~7)
-4. **Layout x Operation Interaction**: aisle x traffic, intersection x congestion, charger demand (~12)
-5. **Within-Layout Percentile**: 11 key cols rank(pct=True) by layout_id (train+test unsupervised)
-6. **Layout Type**: one-hot + KFold target encoding
-7. **Feature Selection**: 3-fold GroupKFold importance, zero ALL folds + bottom 5% removal
-8. **5-Fold CV**: LGB Huber 5000 trees, GroupKFold by layout_id (GPU + CPU fallback)
-9. **Save**: submission, OOF, checkpoint
+## 변경 2: H3 - Composite Features 3개
+- `service_impediment`: (congestion + charge_queue + blocked + collision) / 4 정규화
+- `crisis_indicator`: pack_utilization * service_impediment
+- `paradox_indicator`: pack_utilization * (1 - service_impediment)
+- Total features: 692 + 3 = 695
+
+## 검증 기준
+- Phase 16 재현: CV 8.35~8.45
+- Pass: Public <= 9.86
+- Success: Public < 9.80
